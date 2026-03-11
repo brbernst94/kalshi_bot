@@ -70,10 +70,24 @@ class RiskManager:
         """Subtract taker fee from gross edge."""
         return gross_edge - KALSHI_TAKER_FEE_PCT
 
+    def sync_positions_from_api(self):
+        """Sync open_positions from actual API positions to survive redeployments."""
+        try:
+            api_positions = self.client.get_positions()
+            api_tickers   = {p.get("ticker") for p in api_positions if int(p.get("position", 0)) != 0}
+            # Remove any in-memory positions no longer held
+            stale = [t for t in list(self.open_positions) if t not in api_tickers]
+            for t in stale:
+                logger.info(f"[RISK] Pruning stale position {t} (not in API)")
+                self.open_positions.pop(t, None)
+        except Exception as e:
+            logger.debug(f"[RISK] Position sync failed: {e}")
+
     def approve(self, strategy: str, ticker: str,
                 cost_usd: float, gross_edge: float, notes: str = "") -> bool:
         """Gate all trades. Returns True only if all checks pass."""
         self._reset_daily()
+        self.sync_positions_from_api()
 
         net = self.net_edge(gross_edge)
         if net < MIN_NET_EDGE:

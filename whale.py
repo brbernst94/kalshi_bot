@@ -55,6 +55,8 @@ def fetch_large_fills(client) -> List[Dict]:
             continue
 
         ticker = t.get("ticker", "")
+        if ticker.startswith("KXMVE") or ticker.startswith("KXMVECROSS"):
+            continue
         price  = int(t.get("yes_price", t.get("no_price", 50)))
         side   = t.get("taker_side", "yes")
 

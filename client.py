@@ -271,6 +271,34 @@ class KalshiClient:
                 except Exception:
                     continue
 
+        # Step 4: Final fallback — paginate /markets directly, skip KXMVE/KXMVECROSS
+        # Used when events API returns no open markets (e.g. event volume field absent)
+        if not markets_by_ticker:
+            logger.info("[CLIENT] Per-event fallback returned 0 — paginating /markets directly")
+            cursor = None
+            for page in range(20):
+                try:
+                    resp = self.get_markets(limit=200, cursor=cursor, status="open")
+                    page_markets = resp.get("markets", [])
+                    if not page_markets:
+                        break
+                    added = 0
+                    for m in page_markets:
+                        t = m.get("ticker", "")
+                        if t.startswith("KXMVE") or t.startswith("KXMVECROSS"):
+                            continue
+                        if m.get("status") == "open":
+                            markets_by_ticker[t] = m
+                            added += 1
+                    logger.info(f"[CLIENT] Direct page {page+1}: {added} non-KXMVE markets added")
+                    cursor = resp.get("cursor")
+                    if not cursor:
+                        break
+                    time.sleep(0.1)
+                except Exception as e:
+                    logger.error(f"[CLIENT] Direct pagination failed (page {page}): {e}")
+                    break
+
         result = list(markets_by_ticker.values())
         logger.info(
             f"[CLIENT] get_all_open_markets → {len(result)} open markets "
@@ -304,15 +332,17 @@ class KalshiClient:
         """
         Returns (best_bid_cents, best_ask_cents) for YES side.
         Returns (None, None) if no liquidity.
+        Kalshi orderbook format: {"orderbook": {"yes": [[price, qty], ...], "no": [[price, qty], ...]}}
+        YES ask = 100 - best NO bid (complementary)
         """
-        book = self.get_orderbook(ticker, depth=5)
-        yes_bids = book.get("yes", [])   # [{price, quantity}, …]
-        yes_asks = book.get("no", [])    # NO side = YES ask (complementary)
+        raw = self.get_orderbook(ticker, depth=5)
+        book = raw.get("orderbook", raw)   # unwrap "orderbook" key
 
-        best_bid = int(yes_bids[0]["price"]) if yes_bids else None
-        # YES ask = 100 - NO bid (they are complementary)
-        no_bids  = book.get("no", [])
-        best_ask = (100 - int(no_bids[0]["price"])) if no_bids else None
+        yes_bids = book.get("yes", [])  # [[price, qty], ...] sorted best-first
+        no_bids  = book.get("no",  [])  # [[price, qty], ...] sorted best-first
+
+        best_bid = int(yes_bids[0][0]) if yes_bids else None
+        best_ask = (100 - int(no_bids[0][0])) if no_bids else None
 
         return best_bid, best_ask
 
