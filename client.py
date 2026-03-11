@@ -130,6 +130,7 @@ class KalshiClient:
         else:
             sign_path = path_no_query
         message = f"{ts_ms}{method.upper()}{sign_path}".encode("utf-8")
+        logger.debug(f"SIGNING | ts={ts_ms} | msg={method.upper()}{sign_path}")
 
         signature = self.private_key.sign(
             message,
