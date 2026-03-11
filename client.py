@@ -196,26 +196,84 @@ class KalshiClient:
     # ── Markets ───────────────────────────────────────────────────────────────
 
     def get_markets(self, limit: int = 200, cursor: Optional[str] = None,
-                    status: str = "open") -> Dict:
+                    status: str = "open", category: Optional[str] = None) -> Dict:
         params = {"limit": limit, "status": status}
         if cursor:
             params["cursor"] = cursor
+        if category:
+            params["category"] = category
         return self._get("/markets", params=params)
 
     def get_all_open_markets(self, max_pages: int = 15) -> List[Dict]:
-        """Paginate through all open markets."""
-        markets, cursor = [], None
-        for _ in range(max_pages):
-            resp   = self.get_markets(limit=200, cursor=cursor)
-            batch  = resp.get("markets", [])
-            if not batch:
-                break
-            markets.extend(batch)
-            cursor = resp.get("cursor")
-            if not cursor:
-                break
-            time.sleep(0.25)
-        return markets
+        """
+        Fetch liquid open markets across key Kalshi categories.
+        Skips KXMVE (sports parlays) which are illiquid and have no prices.
+        Falls back to full pagination if category fetch returns nothing.
+        """
+        # Kalshi categories that have real price activity
+        TARGET_CATEGORIES = [
+            "economics", "politics", "financials",
+            "crypto", "climate", "sports", "entertainment"
+        ]
+
+        markets_by_ticker: dict = {}
+
+        for cat in TARGET_CATEGORIES:
+            cursor = None
+            for _ in range(5):   # up to 5 pages per category (1000 markets)
+                try:
+                    resp  = self.get_markets(limit=200, cursor=cursor, category=cat)
+                    batch = resp.get("markets", [])
+                    if not batch:
+                        break
+                    for m in batch:
+                        markets_by_ticker[m["ticker"]] = m
+                    cursor = resp.get("cursor")
+                    if not cursor:
+                        break
+                    time.sleep(0.1)
+                except Exception as e:
+                    logger.debug(f"[CLIENT] Category '{cat}' fetch error: {e}")
+                    break
+
+        # Filter to markets with at least some price signal, skip dead KXMVE
+        liquid = [
+            m for m in markets_by_ticker.values()
+            if not m.get("ticker", "").startswith("KXMVE")
+            and (
+                int(m.get("yes_bid",    0) or 0) > 0
+                or int(m.get("yes_ask",  0) or 0) > 0
+                or int(m.get("last_price", 0) or 0) > 0
+            )
+        ]
+
+        # If category filtering returns nothing, fall back to raw pagination
+        if not liquid:
+            logger.warning("[CLIENT] Category fetch returned 0 liquid markets — falling back to full pagination")
+            cursor = None
+            all_markets = []
+            for _ in range(max_pages):
+                resp  = self.get_markets(limit=200, cursor=cursor)
+                batch = resp.get("markets", [])
+                if not batch:
+                    break
+                all_markets.extend(batch)
+                cursor = resp.get("cursor")
+                if not cursor:
+                    break
+                time.sleep(0.25)
+            liquid = [
+                m for m in all_markets
+                if not m.get("ticker", "").startswith("KXMVE")
+                and (
+                    int(m.get("yes_bid",    0) or 0) > 0
+                    or int(m.get("yes_ask",  0) or 0) > 0
+                    or int(m.get("last_price", 0) or 0) > 0
+                )
+            ]
+
+        logger.debug(f"[CLIENT] get_all_open_markets → {len(liquid)} liquid markets")
+        return liquid
 
     def get_market(self, ticker: str) -> Dict:
         return self._get(f"/markets/{ticker}")

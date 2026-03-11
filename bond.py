@@ -67,12 +67,12 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             logger.error(f"Market fetch failed: {e}")
             return []
 
-    # Diagnostic: log the fields from the first market so we can verify structure
+    # Diagnostic: log the first market to verify we have real liquid markets
     if markets:
         sample = markets[0]
-        logger.info(f"[BOND] Sample market fields: {list(sample.keys())}")
-        logger.info(f"[BOND] Sample prices: yes_bid={sample.get('yes_bid')} yes_ask={sample.get('yes_ask')} last_price={sample.get('last_price')} yes_price={sample.get('yes_price')}")
-        logger.info(f"[BOND] Sample close fields: close_time={sample.get('close_time')} expiration_time={sample.get('expiration_time')} end_date={sample.get('end_date')}")
+        logger.info(f"[BOND] Sample ticker: {sample.get('ticker', 'N/A')}")
+        logger.info(f"[BOND] Sample prices: yes_bid={sample.get('yes_bid')} yes_ask={sample.get('yes_ask')} last_price={sample.get('last_price')}")
+        logger.info(f"[BOND] Sample close: close_time={sample.get('close_time')} expiration_time={sample.get('expiration_time')}")
 
     open_count = sum(1 for m in markets if m.get("status") == "open")
     logger.info(f"[BOND] {len(markets)} total markets, {open_count} open")
