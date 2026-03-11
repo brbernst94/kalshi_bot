@@ -3,11 +3,13 @@ main.py — Kalshi Trading Bot
 ==============================
 CFTC-regulated prediction market trading.
 Four strategies, $500 seed, $5k/month target.
+Daily analyst runs at 00:15 UTC — scores strategies, rewrites config if needed.
 
 Usage:
   python main.py            # Live trading
   python main.py --demo     # Paper trade on demo-api.kalshi.co
   python main.py --dry-run  # Scan only, zero orders placed
+  python main.py --analyze  # Run daily analysis immediately and exit
 """
 
 import argparse
@@ -19,15 +21,16 @@ import time
 
 import schedule
 
-from utils.logger    import setup_logging
-from utils.client    import KalshiClient
-from utils.risk      import RiskManager
-from utils.monitor   import check_positions
-from utils.dashboard import print_dashboard, monthly_summary
-import strategies.whale    as whale_strat
-import strategies.longshot as longshot_strat
-import strategies.fade     as fade_strat
-import strategies.bond     as bond_strat
+from logger    import setup_logging
+from client    import KalshiClient
+from risk      import RiskManager
+from monitor   import check_positions
+from dashboard import print_dashboard, monthly_summary
+from analyst   import run_daily_analysis
+import whale as whale_strat
+import longshot as longshot_strat
+import fade as fade_strat
+import bond as bond_strat
 from config import (
     WHALE_SCAN_MINS, FADE_SCAN_MINS,
     BOND_SCAN_MINS, LONGSHOT_SCAN_MINS, MONITOR_SCAN_MINS
@@ -68,6 +71,22 @@ def run_monitor():
     check_positions(client, risk_manager)
     print_dashboard(risk_manager, cycle)
 
+def run_analysis():
+    """Daily analyst — scores strategies and rebalances config if needed."""
+    logger.info("━━━ DAILY ANALYSIS ━━━")
+    try:
+        scores, new_alloc, changed = run_daily_analysis()
+        if changed:
+            logger.info(
+                "⚠️  Config rebalanced. New allocation: " +
+                " | ".join(f"{k}={v:.0%}" for k, v in new_alloc.items())
+            )
+            logger.info("   Strategies will use new weights on next scan cycle.")
+        else:
+            logger.info("✅ All strategies performing — no rebalancing needed.")
+    except Exception as e:
+        logger.error(f"[ANALYST] Analysis failed: {e}", exc_info=True)
+
 def shutdown(signum, frame):
     logger.info("Shutdown signal — final report:")
     print_dashboard(risk_manager, cycle)
@@ -79,22 +98,28 @@ def main():
     global client, risk_manager, DRY_RUN
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run", action="store_true",
+    parser.add_argument("--dry-run",  action="store_true",
                         help="Scan only — no orders placed")
-    parser.add_argument("--demo", action="store_true",
+    parser.add_argument("--demo",     action="store_true",
                         help="Use Kalshi demo environment")
-    args = parser.parse_args()
+    parser.add_argument("--analyze",  action="store_true",
+                        help="Run daily analysis immediately and exit")
+    args    = parser.parse_args()
     DRY_RUN = args.dry_run
 
     if args.demo:
         os.environ["USE_DEMO"] = "true"
-        # Reload config to pick up USE_DEMO
         import importlib, config
         importlib.reload(config)
 
     mode = "DRY-RUN" if DRY_RUN else ("DEMO" if args.demo else "LIVE 🔴")
     logger.info(f"🚀 Kalshi Bot | {mode} | Target: $5,000/month")
     logger.info(f"   Base URL: {__import__('config').BASE_URL}")
+
+    # Analysis-only mode (useful for manual inspection)
+    if args.analyze:
+        run_analysis()
+        sys.exit(0)
 
     client       = KalshiClient()
     risk_manager = RiskManager(client)
@@ -115,12 +140,17 @@ def main():
     signal.signal(signal.SIGINT,  shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
+    # ── Schedules ─────────────────────────────────────────────────────────────
     schedule.every(WHALE_SCAN_MINS).minutes.do(run_whale)
     schedule.every(FADE_SCAN_MINS).minutes.do(run_fade)
     schedule.every(BOND_SCAN_MINS).minutes.do(run_bond)
     schedule.every(LONGSHOT_SCAN_MINS).minutes.do(run_longshot)
     schedule.every(MONITOR_SCAN_MINS).minutes.do(run_monitor)
-    schedule.every().day.at("00:05").do(monthly_summary)
+
+    # Daily analysis at 00:15 UTC — after midnight reset, before first trades
+    schedule.every().day.at("00:15").do(run_analysis)
+    # Monthly summary at end of day
+    schedule.every().day.at("23:55").do(monthly_summary)
 
     logger.info("Running initial scan on startup...")
     run_whale()
@@ -129,7 +159,7 @@ def main():
     run_fade()
     run_monitor()
 
-    logger.info("⏱  Main loop active. CTRL-C to stop.")
+    logger.info("⏱  Main loop active. Daily analysis scheduled for 00:15 UTC.")
     while True:
         schedule.run_pending()
         time.sleep(20)
