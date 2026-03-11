@@ -26,11 +26,12 @@ logger = logging.getLogger(__name__)
 class RiskManager:
     def __init__(self, client):
         self.client            = client
-        self.daily_pnl         = 0.0
+        self.daily_pnl         = 0.0   # Always starts at 0 on fresh deploy
         self.daily_date        = date.today()
         self.open_positions    = {}
-        self._recently_closed  = set()   # tickers closed this session, don't re-add from API
+        self._recently_closed  = set()
         self._init_log()
+        logger.info("[RISK] RiskManager initialised — daily PnL reset to $0.00")
 
     def _reset_daily(self):
         today = date.today()
@@ -117,7 +118,7 @@ class RiskManager:
             balance = STARTING_BANKROLL_USD
 
         if self.daily_pnl <= -(balance * MAX_DAILY_LOSS_PCT):
-            logger.warning(f"REJECT daily loss limit: ${self.daily_pnl:.2f}")
+            logger.warning(f"REJECT daily loss limit: ${self.daily_pnl:.2f} (limit=${balance * MAX_DAILY_LOSS_PCT:.2f} = {MAX_DAILY_LOSS_PCT:.0%} of ${balance:.2f})")
             return False
 
         if len(self.open_positions) >= MAX_OPEN_POSITIONS:
