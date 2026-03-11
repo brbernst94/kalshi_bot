@@ -1,0 +1,160 @@
+"""
+utils/risk.py — Kalshi Risk Manager
+======================================
+Key Kalshi differences vs Polymarket:
+  - 1% taker fee eats into every trade — minimum edge is 3.5% net
+  - Prices in cents, so edge calculations use integers
+  - Contracts are fungible $1 instruments priced in cents
+  - No gas fees, no USDC slippage — cleaner cost model
+"""
+
+import csv
+import logging
+import os
+from datetime import date, datetime, timezone
+from typing import Dict, Optional
+
+from config import (
+    KALSHI_TAKER_FEE_PCT, MAX_DAILY_LOSS_PCT,
+    MAX_OPEN_POSITIONS, MAX_SINGLE_POSITION_PCT,
+    MIN_NET_EDGE, STARTING_BANKROLL_USD, TRADE_LOG_FILE,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class RiskManager:
+    def __init__(self, client):
+        self.client         = client
+        self.daily_pnl      = 0.0
+        self.daily_date     = date.today()
+        self.open_positions = {}   # ticker -> {count, entry_cents, strategy, opened_at}
+        self._init_log()
+
+    def _reset_daily(self):
+        today = date.today()
+        if today != self.daily_date:
+            logger.info(f"Daily reset | yesterday PnL: ${self.daily_pnl:+.2f}")
+            self.daily_pnl  = 0.0
+            self.daily_date = today
+
+    def _init_log(self):
+        os.makedirs(os.path.dirname(TRADE_LOG_FILE), exist_ok=True)
+        if not os.path.exists(TRADE_LOG_FILE):
+            with open(TRADE_LOG_FILE, "w", newline="") as f:
+                csv.writer(f).writerow([
+                    "timestamp", "strategy", "ticker", "side", "action",
+                    "price_cents", "count", "cost_usd", "fee_usd",
+                    "expected_pnl_usd", "status", "notes"
+                ])
+
+    def log_trade(self, strategy: str, ticker: str, side: str, action: str,
+                  price_cents: int, count: int, expected_pnl: float,
+                  status: str = "PLACED", notes: str = ""):
+        cost    = count * price_cents / 100
+        fee     = cost * KALSHI_TAKER_FEE_PCT
+        ts      = datetime.now(timezone.utc).isoformat()
+        with open(TRADE_LOG_FILE, "a", newline="") as f:
+            csv.writer(f).writerow([
+                ts, strategy, ticker, side, action,
+                price_cents, count, round(cost, 2), round(fee, 4),
+                round(expected_pnl, 2), status, notes[:80]
+            ])
+        logger.info(
+            f"TRADE | {strategy} | {action.upper()} {side.upper()} "
+            f"{count}x @ {price_cents}¢ | cost=${cost:.2f} fee=${fee:.2f} "
+            f"| ev=${expected_pnl:.2f} | {ticker}"
+        )
+
+    def net_edge(self, gross_edge: float) -> float:
+        """Subtract taker fee from gross edge."""
+        return gross_edge - KALSHI_TAKER_FEE_PCT
+
+    def approve(self, strategy: str, ticker: str,
+                cost_usd: float, gross_edge: float, notes: str = "") -> bool:
+        """Gate all trades. Returns True only if all checks pass."""
+        self._reset_daily()
+
+        net = self.net_edge(gross_edge)
+        if net < MIN_NET_EDGE:
+            logger.debug(f"REJECT [{strategy}] net edge {net:.3f} < {MIN_NET_EDGE}")
+            return False
+
+        try:
+            balance = self.client.get_balance()
+        except Exception:
+            balance = STARTING_BANKROLL_USD
+
+        if self.daily_pnl <= -(balance * MAX_DAILY_LOSS_PCT):
+            logger.warning(f"REJECT daily loss limit: ${self.daily_pnl:.2f}")
+            return False
+
+        if len(self.open_positions) >= MAX_OPEN_POSITIONS:
+            logger.warning(f"REJECT max positions ({MAX_OPEN_POSITIONS})")
+            return False
+
+        if cost_usd > balance * MAX_SINGLE_POSITION_PCT:
+            logger.warning(f"REJECT size ${cost_usd:.2f} > cap")
+            return False
+
+        if ticker in self.open_positions:
+            logger.debug(f"REJECT duplicate position {ticker}")
+            return False
+
+        logger.info(f"APPROVE [{strategy}] ${cost_usd:.2f} net_edge={net:.3f} | {notes[:50]}")
+        return True
+
+    def contracts_for_strategy(self, strategy: str, price_cents: int,
+                                edge: float, confidence: float = 0.6) -> int:
+        """
+        Kelly-inspired contract count.
+        Returns number of contracts to buy for this strategy + edge level.
+        """
+        try:
+            balance = self.client.get_balance()
+        except Exception:
+            balance = STARTING_BANKROLL_USD
+
+        from config import STRATEGY_ALLOCATION
+        strat_budget = balance * STRATEGY_ALLOCATION.get(strategy, 0.20)
+        # Kelly fraction: (edge × confidence), capped at MAX_SINGLE_POSITION_PCT
+        fraction = min(edge * confidence * 1.5, MAX_SINGLE_POSITION_PCT)
+        budget   = balance * fraction
+        budget   = min(budget, strat_budget * 0.6)
+
+        return max(1, int(budget * 100 / max(price_cents, 1)))
+
+    def record_open(self, ticker: str, count: int,
+                    entry_cents: int, strategy: str):
+        self.open_positions[ticker] = {
+            "count":       count,
+            "entry_cents": entry_cents,
+            "strategy":    strategy,
+            "opened_at":   datetime.now(timezone.utc),
+        }
+
+    def record_close(self, ticker: str, exit_cents: int) -> float:
+        if ticker not in self.open_positions:
+            return 0.0
+        pos   = self.open_positions.pop(ticker)
+        count = pos["count"]
+        # PnL = (exit - entry) × count / 100  (converting cents to dollars)
+        pnl   = (exit_cents - pos["entry_cents"]) * count / 100
+        # Subtract fees
+        pnl  -= count * exit_cents / 100 * KALSHI_TAKER_FEE_PCT
+        self.daily_pnl += pnl
+        logger.info(f"CLOSED {ticker} | pnl=${pnl:+.2f} | daily=${self.daily_pnl:+.2f}")
+        return pnl
+
+    def status(self) -> Dict:
+        try:
+            balance = self.client.get_balance()
+        except Exception:
+            balance = 0.0
+        return {
+            "balance":        balance,
+            "daily_pnl":      self.daily_pnl,
+            "open_positions": len(self.open_positions),
+            "positions":      self.open_positions,
+            "daily_date":     str(self.daily_date),
+        }
