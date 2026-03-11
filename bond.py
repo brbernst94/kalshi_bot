@@ -67,7 +67,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             logger.error(f"Market fetch failed: {e}")
             return []
 
-    open_markets = [m for m in markets if m.get("status") == "open"]
+    open_markets = list(markets)  # API already returns open markets only
     # Pre-filter: skip sports — bond strategy targets policy/financial/economic markets
     SPORTS_PREFIXES = (
         "KXNCAAMB", "KXNCAAFB", "KXNCAAWB", "KXUCLGAME",

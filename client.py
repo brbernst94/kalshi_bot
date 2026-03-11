@@ -176,11 +176,28 @@ class KalshiClient:
     # ── Account ───────────────────────────────────────────────────────────────
 
     def get_balance(self) -> float:
-        """Returns available USD balance."""
-        data = self._get("/portfolio/balance")
-        # Balance returned in cents by Kalshi
-        cents = data.get("balance", 0)
-        return round(cents / 100, 2)
+        """Returns total portfolio value: cash + current value of open positions."""
+        data  = self._get("/portfolio/balance")
+        cash  = round(data.get("balance", 0) / 100, 2)
+
+        # Add current market value of open positions
+        try:
+            positions = self.get_positions()
+            position_value = 0.0
+            for p in positions:
+                net = int(p.get("net_position", 0))
+                if net == 0:
+                    continue
+                # value = contracts × current_yes_price (for YES) or (100-yes) for NO
+                yes_price = int(p.get("market_exposure", p.get("value", 0)))
+                # Kalshi returns `value` field in cents for the position
+                value_cents = abs(int(p.get("value", 0)))
+                position_value += value_cents / 100
+        except Exception:
+            position_value = 0.0
+
+        total = cash + position_value
+        return round(total, 2)
 
     def get_positions(self) -> List[Dict]:
         data = self._get("/portfolio/positions")
@@ -242,25 +259,40 @@ class KalshiClient:
         logger.info(f"[CLIENT] {len(all_events)} total events fetched")
 
         # Step 2: Filter out KXMVE, extract any embedded markets
-        good_events = []
+        # Split into sports vs non-sports so non-sports always get fetched
+        SPORTS_EVENT_PREFIXES = (
+            "KXNCAAMB", "KXNCAAFB", "KXNCAAWB", "KXUCLGAME",
+            "KXWTAMATCH", "KXATPMATCH", "KXWTACHALLENGER", "KXATPCHALLENGERMATCH",
+            "KXNHL", "KXNBA", "KXNFL", "KXMLB", "KXMLS",
+            "KXARGPREM", "KXWBC", "KXLIGUE", "KXBUNDES", "KXSERIE",
+        )
+        sports_events   = []
+        nonsports_events = []
         for event in all_events:
             eticker = event.get("event_ticker", event.get("ticker", ""))
             if eticker.startswith("KXMVE"):
                 kxmve_skipped += 1
                 continue
-            good_events.append(event)
+            if eticker.startswith(SPORTS_EVENT_PREFIXES):
+                sports_events.append(event)
+            else:
+                nonsports_events.append(event)
             for m in event.get("markets", []):
                 t = m.get("ticker", "")
                 if t:
                     markets_by_ticker[t] = m
 
-        logger.info(f"[CLIENT] {len(good_events)} non-KXMVE events, {kxmve_skipped} KXMVE skipped, {len(markets_by_ticker)} embedded markets")
+        good_events = nonsports_events + sports_events  # non-sports prioritised
+        logger.info(f"[CLIENT] {len(nonsports_events)} non-sports + {len(sports_events)} sports events | {kxmve_skipped} KXMVE skipped | {len(markets_by_ticker)} embedded markets")
 
-        # Step 3: If no embedded markets, fetch per-event (cap at 300 most active)
+        # Step 3: Fetch per-event — always prioritise non-sports events
+        # This ensures bond/longshot/fade see financial/political markets even during March Madness
         if not markets_by_ticker and good_events:
-            good_events.sort(key=lambda e: int(e.get("volume", 0) or 0), reverse=True)
-            fetch_events = good_events[:300]
-            logger.info(f"[CLIENT] No embedded markets — fetching per event (top {len(fetch_events)} by volume)")
+            # Non-sports: take up to 200 sorted by volume
+            nonsports_events.sort(key=lambda e: int(e.get("volume", 0) or 0), reverse=True)
+            sports_events.sort(key=lambda e: int(e.get("volume", 0) or 0), reverse=True)
+            fetch_events = nonsports_events[:200] + sports_events[:100]
+            logger.info(f"[CLIENT] Fetching per event: {len(nonsports_events[:200])} non-sports + {len(sports_events[:100])} sports")
             for event in fetch_events:
                 eticker = event.get("event_ticker", event.get("ticker", ""))
                 try:

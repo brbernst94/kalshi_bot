@@ -97,7 +97,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             logger.error(f"Market fetch failed: {e}")
             return []
 
-    open_markets = [m for m in markets if m.get("status") == "open"]
+    open_markets = list(markets)  # API already returns open markets only
     SPORTS_PREFIXES = ("KXMVE", "KXNCAAMB", "KXUCLGAME", "KXNCAAFB", "KXWTACHALLENGER",
                        "KXNBA", "KXNFL", "KXMLB", "KXNHL", "KXMLS", "KXHOUSERACE")
     open_markets = [m for m in open_markets

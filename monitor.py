@@ -161,8 +161,16 @@ def check_positions(client, risk_manager) -> int:
                 exit_price = mid
 
             try:
-                # Exit using the same side we entered on
-                exit_side = pos.get("side", "yes")
+                # Determine correct exit side:
+                # net_position > 0 = we hold YES contracts → sell YES
+                # net_position < 0 = we hold NO contracts → sell NO
+                net = pos.get("net_position", pos.get("count", 1))
+                if "side" in pos:
+                    exit_side = pos["side"]
+                elif int(net) < 0:
+                    exit_side = "no"
+                else:
+                    exit_side = "yes"
                 try:
                     client.place_limit_order(
                         ticker=ticker, side=exit_side, action="sell",
@@ -170,13 +178,22 @@ def check_positions(client, risk_manager) -> int:
                     )
                 except Exception as e:
                     if "400" in str(e):
-                        # Market may have moved — try at current bid (5¢ lower)
-                        fallback_price = max(exit_price - 5, 1)
-                        client.place_limit_order(
-                            ticker=ticker, side=exit_side, action="sell",
-                            price_cents=fallback_price, count=count,
-                        )
-                        exit_price = fallback_price
+                        # Try opposite side — position may have been entered differently
+                        flip_side = "no" if exit_side == "yes" else "yes"
+                        try:
+                            client.place_limit_order(
+                                ticker=ticker, side=flip_side, action="sell",
+                                price_cents=exit_price, count=count,
+                            )
+                            exit_side = flip_side
+                        except Exception:
+                            # Last resort: 5¢ lower on original side
+                            fallback_price = max(exit_price - 5, 1)
+                            client.place_limit_order(
+                                ticker=ticker, side=exit_side, action="sell",
+                                price_cents=fallback_price, count=count,
+                            )
+                            exit_price = fallback_price
                     else:
                         raise
                 pnl = risk_manager.record_close(ticker, exit_price)

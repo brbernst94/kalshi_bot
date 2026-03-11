@@ -95,9 +95,11 @@ class RiskManager:
                         "count":       abs(net),
                         "entry_cents": 50,
                         "strategy":    "unknown",
+                        "side":        "yes" if net > 0 else "no",
+                        "net_position": net,
                         "opened_at":   __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
                     }
-                    logger.info(f"[RISK] Restored position {t} from API (net={net})")
+                    logger.info(f"[RISK] Restored position {t} from API (net={net}, side={'yes' if net > 0 else 'no'})")
         except Exception as e:
             logger.debug(f"[RISK] Position sync failed: {e}")
 

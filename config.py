@@ -42,7 +42,7 @@ MAX_SINGLE_POSITION_PCT  = 0.25    # Up to 25% on one high-conviction trade
 MAX_DAILY_LOSS_PCT       = 0.20    # Hard stop if down 20% in a day
 MAX_SINGLE_POSITION_PCT  = 0.20   # Max 20% per position
 MAX_DAILY_LOSS_PCT       = 0.50    # Hard stop if down 50% in a day
-MAX_OPEN_POSITIONS       = 4       # Back to 4 — prevents overexposure on correlated sports bets
+MAX_OPEN_POSITIONS       = 20      # Allow up to 20 simultaneous positions
 # Minimum NET edge after fees (need more than 1% just to break even)
 MIN_NET_EDGE             = 0.02   # 3.5% net edge minimum
 
