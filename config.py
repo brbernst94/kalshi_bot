@@ -86,7 +86,7 @@ LONGSHOT_SCAN_MINS = 60
 MONITOR_SCAN_MINS  = 10
 
 # ── Logging ───────────────────────────────────────────────────────────────────
-LOG_LEVEL      = "DEBUG"
+LOG_LEVEL      = "INFO"
 LOG_FILE       = "logs/bot.log"
 TRADE_LOG_FILE = "logs/trades.csv"
 
