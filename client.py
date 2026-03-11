@@ -37,25 +37,59 @@ logger = logging.getLogger(__name__)
 
 
 def _load_private_key():
-    """Load RSA private key from env string or file path."""
+    """
+    Load RSA private key — robust against Railway env var formatting.
+    Handles:
+      - PKCS#8  (-----BEGIN PRIVATE KEY-----)
+      - PKCS#1  (-----BEGIN RSA PRIVATE KEY-----)
+      - Missing newline after header (Railway squashes it)
+      - Literal \\n escape sequences instead of real newlines
+    """
+    import re as _re, base64 as _b64
+
     key_data = KALSHI_PRIVATE_KEY.strip()
     if not key_data:
-        raise ValueError(
-            "KALSHI_PRIVATE_KEY not set. Set it to your PEM key string "
-            "or a path to your .key file in .env"
-        )
-    # If it looks like a file path
+        raise ValueError("KALSHI_PRIVATE_KEY not set in environment variables.")
+
+    # File path shortcut
     if not key_data.startswith("-----") and os.path.exists(key_data):
         with open(key_data, "rb") as f:
-            key_bytes = f.read()
-    else:
-        # Inline PEM string — normalise escaped newlines
-        pem = key_data.replace("\\n", "\n")
-        key_bytes = pem.encode("utf-8")
+            return serialization.load_pem_private_key(
+                f.read(), password=None, backend=default_backend()
+            )
 
-    return serialization.load_pem_private_key(
-        key_bytes, password=None, backend=default_backend()
-    )
+    # --- Normalise the PEM string ---
+    # 1. Replace literal \n escape sequences with real newlines
+    pem = key_data.replace("\\n", "\n")
+    # 2. Ensure newline immediately after -----BEGIN ...----- header
+    pem = _re.sub(r"(-----BEGIN [A-Z ]+-----)\s*(\S)", r"\1\n\2", pem)
+    # 3. Ensure newline immediately before -----END ...----- footer
+    pem = _re.sub(r"(\S)\s*(-----END [A-Z ]+-----)", r"\1\n\2", pem)
+    # 4. Ensure trailing newline
+    pem = pem.strip() + "\n"
+
+    key_bytes = pem.encode("utf-8")
+
+    # Try standard PEM load (works for both PKCS#8 and PKCS#1)
+    try:
+        return serialization.load_pem_private_key(
+            key_bytes, password=None, backend=default_backend()
+        )
+    except Exception as e:
+        logger.error(f"PEM load failed ({e}) — attempting DER fallback")
+
+    # DER fallback: strip headers, decode base64, load raw DER
+    try:
+        b64 = _re.sub(r"-----[^-]+-----", "", pem).replace("\n", "").strip()
+        der = _b64.b64decode(b64)
+        from cryptography.hazmat.primitives.serialization import load_der_private_key
+        return load_der_private_key(der, password=None, backend=default_backend())
+    except Exception as e2:
+        raise ValueError(
+            f"Could not load private key. PEM error: {e} | DER error: {e2}\n"
+            "Check that KALSHI_PRIVATE_KEY in Railway contains the full key "
+            "including -----BEGIN RSA PRIVATE KEY----- and -----END RSA PRIVATE KEY----- lines."
+        )
 
 
 def _build_session() -> requests.Session:
