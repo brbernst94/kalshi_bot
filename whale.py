@@ -36,44 +36,40 @@ def _cost_usd(count: int, price_cents: int) -> float:
 
 def fetch_large_fills(client) -> List[Dict]:
     """
-    Pull recent trade fills across all open markets.
+    Pull recent large trades from the global /markets/trades endpoint.
+    Much faster than per-market polling — single API call gets all recent fills.
     Filter to fills ≥ WHALE_MIN_CONTRACTS.
     """
     large_fills = []
     try:
-        markets = client.get_all_open_markets()
+        # Global trades endpoint — returns the most recent fills across all markets
+        data   = client._get("/markets/trades", params={"limit": 100})
+        trades = data.get("trades", [])
     except Exception as e:
         logger.error(f"[WHALE] Market fetch failed: {e}")
         return []
 
-    for m in markets:
-        ticker = m.get("ticker")
-        if not ticker:
+    for t in trades:
+        count = int(t.get("count", 0))
+        if count < WHALE_MIN_CONTRACTS:
             continue
 
-        try:
-            trades = client.get_trades(ticker, limit=20)
-        except Exception:
-            continue
+        ticker = t.get("ticker", "")
+        price  = int(t.get("yes_price", t.get("no_price", 50)))
+        side   = t.get("taker_side", "yes")
 
-        for t in trades:
-            count = int(t.get("count", 0))
-            if count < WHALE_MIN_CONTRACTS:
-                continue
-
-            price = int(t.get("yes_price", t.get("no_price", 50)))
-            large_fills.append({
-                "ticker":     ticker,
-                "title":      m.get("title", "")[:80],
-                "side":       t.get("taker_side", "yes"),
-                "action":     "buy",   # Taker fills are typically buys
-                "price_cents": price,
-                "count":      count,
-                "cost_usd":   _cost_usd(count, price),
-                "member_id":  t.get("taker_member_id", ""),
-                "created_at": t.get("created_time", ""),
-                "is_tracked": t.get("taker_member_id", "") in TRACKED_WHALE_MEMBERS,
-            })
+        large_fills.append({
+            "ticker":      ticker,
+            "title":       t.get("ticker", "")[:80],
+            "side":        side,
+            "action":      "buy",
+            "price_cents": price,
+            "count":       count,
+            "cost_usd":    _cost_usd(count, price),
+            "member_id":   t.get("taker_member_id", ""),
+            "created_at":  t.get("created_time", ""),
+            "is_tracked":  t.get("taker_member_id", "") in TRACKED_WHALE_MEMBERS,
+        })
 
     large_fills.sort(key=lambda x: x["cost_usd"], reverse=True)
     logger.info(f"[WHALE] {len(large_fills)} large fill(s) found")
@@ -121,7 +117,10 @@ def scan(client, risk_manager) -> List[Dict]:
         member_id = fill["member_id"]
         stats     = get_member_stats(client, member_id)
 
-        if stats["win_rate"] < WHALE_MIN_WIN_RATE and not fill["is_tracked"]:
+        # Allow tracked whales OR any large untracked fill (unknown members default to 0.55)
+        # Don't block on win_rate if TRACKED_WHALE_MEMBERS is empty
+        tracked_only_gate = bool(TRACKED_WHALE_MEMBERS)
+        if tracked_only_gate and stats["win_rate"] < WHALE_MIN_WIN_RATE and not fill["is_tracked"]:
             continue
 
         # Cool-down: skip if we already copied this ticker recently

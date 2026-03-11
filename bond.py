@@ -70,11 +70,11 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
     open_markets = [m for m in markets if m.get("status") == "open"]
     logger.info(f"[BOND] {len(markets)} total markets, {len(open_markets)} open")
 
-    # Pass 1: filter by close time using cheap list data
+    # Pass 1: filter by close time — include markets with missing close_time (assume eligible)
     time_filtered = []
     for m in open_markets:
         days = days_to_close(m)
-        if days is not None and 0.3 <= days <= BOND_MAX_DAYS:
+        if days is None or (0.3 <= days <= BOND_MAX_DAYS):
             time_filtered.append(m)
 
     logger.info(f"[BOND] {len(time_filtered)} markets within {BOND_MAX_DAYS}-day window")
@@ -84,29 +84,23 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         return []
 
     # Pass 2: fetch individual market details for price data
-    # List endpoint doesn't populate yes_bid/yes_ask — need per-market fetch
-    import time as _time
     for m in time_filtered:
         ticker = m.get("ticker", "")
         try:
             detail = client.get_market(ticker)
-            market_data = detail.get("market", detail)  # API wraps in "market" key
+            market_data = detail.get("market", detail)
         except Exception as e:
             logger.debug(f"[BOND] Detail fetch failed {ticker}: {e}")
             continue
 
         days = days_to_close(market_data) or days_to_close(m)
         if days is None:
-            continue
+            days = 7  # assume week if unknown — safer to include than exclude
 
         yes_price_cents = get_yes_price(market_data)
         if yes_price_cents is None or yes_price_cents == 0:
             continue
         if yes_price_cents < BOND_MIN_PRICE_CENTS or yes_price_cents >= 99:
-            continue
-
-        open_int = int(market_data.get("open_interest", m.get("open_interest", 0)) or 0)
-        if open_int < 100:
             continue
 
         gross_return = (100 - yes_price_cents) / yes_price_cents
@@ -123,9 +117,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             "net_return":    net_return,
             "annualised":    annualised,
             "days":          days,
-            "open_interest": open_int,
         })
-        _time.sleep(0.05)  # gentle rate limiting
 
     candidates.sort(key=lambda x: x["net_return"], reverse=True)
     logger.info(f"[BOND] {len(candidates)} candidates")

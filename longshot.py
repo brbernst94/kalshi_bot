@@ -85,7 +85,6 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
     cat_filtered = [m for m in open_markets if _category_score(m) >= 0.50]
     logger.info(f"[LONGSHOT] {len(cat_filtered)} markets pass category filter")
 
-    import time as _time
     for m in cat_filtered:
         ticker = m.get("ticker", "")
 
@@ -109,20 +108,12 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
                     continue
 
         if yes_ask is None or yes_ask == 0:
-            _time.sleep(0.05)
             continue
         if not (LONGSHOT_MIN_PRICE_CENTS <= yes_ask <= LONGSHOT_MAX_PRICE_CENTS):
-            _time.sleep(0.05)
-            continue
-
-        open_int = int(md.get("open_interest", m.get("open_interest", 0)) or 0)
-        if open_int < LONGSHOT_MIN_OPEN_INT:
-            _time.sleep(0.05)
             continue
 
         days = days_to_close(md) or days_to_close(m)
         if days and days < 1:
-            _time.sleep(0.05)
             continue
 
         cat_score = _category_score(md)
@@ -139,7 +130,6 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         ev          = our_prob * payout_mult - 1.0 - KALSHI_TAKER_FEE_PCT
 
         if ev < 0.10:
-            _time.sleep(0.05)
             continue
 
         candidates.append({
@@ -153,7 +143,6 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             "momentum":      momentum,
             "open_interest": open_int,
         })
-        _time.sleep(0.05)
 
     candidates.sort(key=lambda x: x["ev"] * x["cat_score"], reverse=True)
     logger.info(f"[LONGSHOT] {len(candidates)} candidates")
