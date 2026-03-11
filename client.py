@@ -196,90 +196,105 @@ class KalshiClient:
     # ── Markets ───────────────────────────────────────────────────────────────
 
     def get_markets(self, limit: int = 200, cursor: Optional[str] = None,
-                    status: str = "open", series_ticker: Optional[str] = None) -> Dict:
+                    status: str = "open", event_ticker: Optional[str] = None) -> Dict:
         params = {"limit": limit, "status": status}
         if cursor:
             params["cursor"] = cursor
-        if series_ticker:
-            params["series_ticker"] = series_ticker
+        if event_ticker:
+            params["event_ticker"] = event_ticker
         return self._get("/markets", params=params)
 
-    def get_series_list(self) -> List[Dict]:
-        """Return all active Kalshi series."""
-        try:
-            resp = self._get("/series")
-            return resp.get("series", [])
-        except Exception as e:
-            logger.debug(f"[CLIENT] /series failed: {e}")
-            return []
+    def get_events(self, limit: int = 200, cursor: Optional[str] = None,
+                   status: str = "open") -> Dict:
+        """Fetch Kalshi events. Each event contains multiple related markets."""
+        params = {"limit": limit, "status": status}
+        if cursor:
+            params["cursor"] = cursor
+        return self._get("/events", params=params)
 
-    def get_all_open_markets(self, max_pages_per_series: int = 5) -> List[Dict]:
+    def get_all_open_markets(self) -> List[Dict]:
         """
-        Fetch open markets using Kalshi's /series endpoint to avoid the KXMVE flood.
-        Falls back to raw pagination (skipping KXMVE) if /series is unavailable.
+        Fetch all open markets via the /events endpoint.
+        Events are the correct grouping layer — each event holds ~1-10 markets
+        with price data populated. Skips KXMVE sports parlay events.
+        
+        This is the approach used by production Kalshi bots (e.g. OctagonAI).
+        /series and raw /markets pagination are both unreliable for getting prices.
         """
-        series_list = self.get_series_list()
+        markets_by_ticker: dict = {}
+        cursor = None
+        event_count = 0
+        kxmve_skipped = 0
 
-        if series_list:
-            # Filter out KXMVE (sports parlays) series
-            good_series = [
-                s for s in series_list
-                if not s.get("ticker", "").startswith("KXMVE")
-                and s.get("status", "active") in ("active", "open", "")
-            ]
-            logger.info(f"[CLIENT] {len(series_list)} total series, {len(good_series)} non-KXMVE")
-
-            markets_by_ticker: dict = {}
-            for series in good_series:
-                sticker = series.get("ticker", "")
-                cursor  = None
-                for _ in range(max_pages_per_series):
-                    try:
-                        resp  = self.get_markets(limit=200, cursor=cursor, series_ticker=sticker)
-                        batch = resp.get("markets", [])
-                        if not batch:
-                            break
-                        for m in batch:
-                            markets_by_ticker[m["ticker"]] = m
-                        cursor = resp.get("cursor")
-                        if not cursor:
-                            break
-                        time.sleep(0.05)
-                    except Exception as e:
-                        logger.debug(f"[CLIENT] Series '{sticker}' fetch error: {e}")
-                        break
-
-            result = [m for m in markets_by_ticker.values() if m.get("status") == "open"]
-            logger.info(f"[CLIENT] get_all_open_markets → {len(result)} open markets via series")
-            return result
-
-        # Fallback: raw pagination, log first ticker on each page for diagnosis
-        logger.warning("[CLIENT] /series unavailable — falling back to raw pagination (slow)")
-        markets, cursor, page = [], None, 0
-        kxmve_count = 0
-        for page in range(100):
+        for page in range(50):  # up to 50 pages of events (200/page = 10,000 events max)
             try:
-                resp  = self.get_markets(limit=200, cursor=cursor)
-                batch = resp.get("markets", [])
-                if not batch:
+                resp   = self.get_events(limit=200, cursor=cursor)
+                events = resp.get("events", [])
+                if not events:
                     break
-                first_ticker = batch[0].get("ticker", "") if batch else ""
-                kxmve_page   = sum(1 for m in batch if m.get("ticker", "").startswith("KXMVE"))
-                kxmve_count += kxmve_page
-                non_kxmve    = [m for m in batch if not m.get("ticker", "").startswith("KXMVE")]
-                if page % 10 == 0:
-                    logger.info(f"[CLIENT] Page {page}: first={first_ticker[:40]} kxmve={kxmve_page}/200")
-                markets.extend(non_kxmve)
+
+                for event in events:
+                    eticker = event.get("event_ticker", event.get("ticker", ""))
+                    # Skip KXMVE sports parlays
+                    if eticker.startswith("KXMVE"):
+                        kxmve_skipped += 1
+                        continue
+
+                    event_count += 1
+                    # Markets are sometimes embedded in the event object
+                    embedded = event.get("markets", [])
+                    for m in embedded:
+                        if m.get("status") == "open":
+                            markets_by_ticker[m["ticker"]] = m
+
                 cursor = resp.get("cursor")
                 if not cursor:
                     break
-                time.sleep(0.15)
-            except Exception as e:
-                logger.error(f"[CLIENT] Market page fetch failed: {e}")
-                break
-        logger.info(f"[CLIENT] Fallback pagination: {len(markets)} non-KXMVE markets, {kxmve_count} KXMVE skipped over {page+1} pages")
-        return markets
+                time.sleep(0.05)
 
+            except Exception as e:
+                logger.error(f"[CLIENT] Events fetch failed (page {page}): {e}")
+                break
+
+        result = list(markets_by_ticker.values())
+
+        # If events don't embed markets, fetch per event (some API versions)
+        if not result and event_count > 0:
+            logger.info(f"[CLIENT] Events found but no embedded markets — fetching per event")
+            # Re-fetch events and get markets per event_ticker
+            cursor = None
+            for page in range(50):
+                try:
+                    resp   = self.get_events(limit=200, cursor=cursor)
+                    events = resp.get("events", [])
+                    if not events:
+                        break
+                    for event in events:
+                        eticker = event.get("event_ticker", event.get("ticker", ""))
+                        if eticker.startswith("KXMVE"):
+                            continue
+                        try:
+                            mresp  = self.get_markets(limit=100, event_ticker=eticker)
+                            for m in mresp.get("markets", []):
+                                if m.get("status") == "open":
+                                    markets_by_ticker[m["ticker"]] = m
+                            time.sleep(0.05)
+                        except Exception:
+                            continue
+                    cursor = resp.get("cursor")
+                    if not cursor:
+                        break
+                    time.sleep(0.05)
+                except Exception as e:
+                    logger.error(f"[CLIENT] Per-event fetch failed: {e}")
+                    break
+            result = list(markets_by_ticker.values())
+
+        logger.info(
+            f"[CLIENT] get_all_open_markets → {len(result)} open markets "
+            f"from {event_count} events ({kxmve_skipped} KXMVE skipped)"
+        )
+        return result
     def get_market(self, ticker: str) -> Dict:
         return self._get(f"/markets/{ticker}")
 
