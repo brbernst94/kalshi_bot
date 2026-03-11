@@ -26,7 +26,7 @@ USE_DEMO = os.getenv("USE_DEMO", "false").lower() == "true"
 if USE_DEMO:
     BASE_URL = "https://demo-api.kalshi.co/trade-api/v2"
 else:
-    BASE_URL = "https://api.elections.kalshi.com/trade-api/v2"
+    BASE_URL = "https://trading-api.kalshi.com/trade-api/v2"
 
 # ── Kalshi-specific market structure ─────────────────────────────────────────
 # Prices on Kalshi are in CENTS (integer 1–99)

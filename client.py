@@ -123,9 +123,13 @@ class KalshiClient:
     def _sign(self, method: str, path: str) -> Dict[str, str]:
         """Return signed auth headers for a request."""
         ts_ms  = str(int(datetime.datetime.now().timestamp() * 1000))
-        # Strip query string before signing
+        # Kalshi requires signing the FULL path including /trade-api/v2 prefix
         path_no_query = path.split("?")[0]
-        message       = f"{ts_ms}{method.upper()}{path_no_query}".encode("utf-8")
+        if not path_no_query.startswith("/trade-api"):
+            sign_path = "/trade-api/v2" + path_no_query
+        else:
+            sign_path = path_no_query
+        message = f"{ts_ms}{method.upper()}{sign_path}".encode("utf-8")
 
         signature = self.private_key.sign(
             message,
