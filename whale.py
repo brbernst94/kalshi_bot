@@ -74,6 +74,15 @@ def fetch_large_fills(client) -> List[Dict]:
         })
 
     large_fills.sort(key=lambda x: x["cost_usd"], reverse=True)
+
+    # Deduplicate by ticker — keep only the largest fill per market
+    seen = {}
+    for f in large_fills:
+        t = f["ticker"]
+        if t not in seen or f["cost_usd"] > seen[t]["cost_usd"]:
+            seen[t] = f
+    large_fills = sorted(seen.values(), key=lambda x: x["cost_usd"], reverse=True)
+
     logger.info(f"[WHALE] {len(large_fills)} large fill(s) found")
     return large_fills
 
@@ -166,9 +175,14 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
     strat_budget = balance * STRATEGY_ALLOCATION["whale"]
 
     for c in candidates[:2]:
+        # Size up: use a meaningful fraction of strategy budget, not just 20% of 20%
+        per_trade_budget = min(balance * 0.15, strat_budget * 0.5)  # up to 15% of balance
         copy_count = max(1, int(c["count"] * WHALE_MAX_COPY_FRAC * c["confidence"]))
         cost       = client.cost_usd(copy_count, c["price_cents"])
-        cost       = min(cost, strat_budget * 0.6)
+        # If copy_count gives a tiny cost, size up to the budget
+        if cost < per_trade_budget * 0.5:
+            copy_count = max(copy_count, int(per_trade_budget * 100 / max(c["price_cents"], 1)))
+        cost       = min(client.cost_usd(copy_count, c["price_cents"]), per_trade_budget)
         copy_count = max(1, int(cost * 100 / max(c["price_cents"], 1)))
         cost       = client.cost_usd(copy_count, c["price_cents"])
 
@@ -189,6 +203,11 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
             continue
         if current and abs(current - c["price_cents"]) > 8:
             logger.info(f"[WHALE] Price drifted {abs(current - c['price_cents'])}¢ — skip")
+            continue
+
+        # Skip markets that are near resolution (≥95¢ or ≤5¢) — almost done, no edge to copy
+        if c["price_cents"] >= 95 or c["price_cents"] <= 5:
+            logger.debug(f"[WHALE] Skip {c['ticker']} — near resolution at {c['price_cents']}¢")
             continue
 
         entry_price = current or c["price_cents"]

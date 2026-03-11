@@ -22,9 +22,9 @@ logger = logging.getLogger(__name__)
 # ── Per-strategy stop loss ─────────────────────────────────────────────────────
 STOP_LOSS_CENTS = {
     "bond":     -12,   # Near-certain market — if drops 12¢ something changed
-    "fade":     -10,   # Short-duration — cut quickly if wrong
+    "fade":     -8,    # Short-duration — cut quickly if wrong
     "longshot": -999,  # Lottery ticket — hold to resolution
-    "whale":    -15,   # Cut if whale was wrong
+    "whale":    -10,   # Tightened from -15: sports games move fast
 }
 
 # ── Take profit ────────────────────────────────────────────────────────────────
