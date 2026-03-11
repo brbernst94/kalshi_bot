@@ -17,7 +17,7 @@ from config import (
     FADE_CONFIRMATION_HOURS, FADE_MAX_POS_PCT,
     FADE_SPIKE_CENTS, KALSHI_TAKER_FEE_PCT, STRATEGY_ALLOCATION,
 )
-from strategies.bond import days_to_close
+from bond import days_to_close
 
 logger = logging.getLogger(__name__)
 

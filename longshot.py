@@ -16,11 +16,11 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from config import (
-    KALSHI_TAKER_FEE_PCT, LONGSHOT_MAX_POSITION_PCT,
+    KALSHI_TAKER_FEE_PCT, LONGSHOT_MAX_POS_PCT,
     LONGSHOT_MAX_PRICE_CENTS, LONGSHOT_MIN_OPEN_INT,
     LONGSHOT_MIN_PRICE_CENTS, STRATEGY_ALLOCATION,
 )
-from strategies.bond import days_to_close
+from bond import days_to_close
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +148,7 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
     strat_budget = balance * STRATEGY_ALLOCATION["longshot"]
 
     for c in candidates[:4]:
-        per_trade = min(balance * LONGSHOT_MAX_POSITION_PCT, strat_budget / 3)
+        per_trade = min(balance * LONGSHOT_MAX_POS_PCT, strat_budget / 3)
         count     = client.contracts_for_budget(per_trade, c["yes_price"])
         cost      = client.cost_usd(count, c["yes_price"])
 
