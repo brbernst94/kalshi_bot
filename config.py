@@ -81,10 +81,11 @@ FADE_MAX_POS_PCT         = 0.22
 
 # ── Strategy Allocation ───────────────────────────────────────────────────────
 STRATEGY_ALLOCATION = {
-    "whale":    0.35,
-    "fade":     0.25,
-    "bond":     0.20,
-    "longshot": 0.20,
+    "whale":       0.30,   # Whale copy — working, non-sports only
+    "bond":        0.25,   # Near-certainty favorites — research: 90-99¢ wins > priced
+    "datarelease": 0.20,   # CPI/Fed/NFP pre-release — highest edge per Fed research
+    "fade":        0.15,   # Overcorrection fades
+    "longshot":    0.10,   # Fade overpriced YES longshots (buy NO, maker order)
 }
 
 # ── Scheduling ────────────────────────────────────────────────────────────────

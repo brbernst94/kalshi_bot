@@ -388,9 +388,11 @@ class KalshiClient:
 
     def place_limit_order(self, ticker: str, side: str, action: str,
                           price_cents: int, count: int,
-                          post_only: bool = False) -> Dict:
+                          post_only: bool = True) -> Dict:
         """
-        Place a limit order.
+        Place a limit order. post_only=True by default → maker order = ZERO FEES.
+        Research across 300k contracts: makers lose 10%, takers lose 32%.
+        Always use post_only unless speed is critical.
         side:   'yes' or 'no'
         action: 'buy' or 'sell'
         price_cents: integer 1–99
@@ -413,8 +415,9 @@ class KalshiClient:
 
         result = self._post("/portfolio/orders", body)
         order  = result.get("order", result)
+        order_type = "MAKER" if post_only else "TAKER"
         logger.info(
-            f"ORDER | {action.upper()} {side.upper()} {count}x @ {price_cents}¢ "
+            f"ORDER | {order_type} | {action.upper()} {side.upper()} {count}x @ {price_cents}¢ "
             f"| {ticker} | id={order.get('order_id','?')[:12]}"
         )
         return order

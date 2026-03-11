@@ -1,93 +1,58 @@
 """
-strategies/longshot.py — Asymmetric Longshot Strategy (Kalshi)
-===============================================================
-Buy YES contracts priced ≤ 14¢ in high-fertility categories.
-Each contract pays $1.00 if correct → minimum 7x return.
+strategies/longshot.py — Longshot Fade Strategy (Kalshi)
+=========================================================
+STRATEGY PIVOT based on academic research (Bürgi et al. 2025, 300k contracts):
 
-Kalshi-specific advantage over Polymarket:
-  - Resolution is CFTC-enforced with clear criteria — no oracle ambiguity
-  - No wash-trading noise inflating prices
-  - Economic/policy markets (CPI, Fed rate, employment) have data-driven edges
-    that sophisticated traders haven't fully priced in niche events
+  ORIGINAL PLAN: Buy YES contracts priced 2-20¢ (longshots)
+  RESEARCH FINDING: These contracts WIN FAR LESS than price implies.
+    Average taker loss on longshots: ~32%. Structural and persistent.
+
+  NEW PLAN: FADE the longshot bias by buying NO on overpriced cheap YES markets.
+    We post as MAKER → zero fees.
+    Statistical edge from bias working FOR us.
+
+  TARGET: Markets priced 3-20¢ YES in entertainment/tech/culture categories
+    where longshot bias is strongest.
+  METHOD: Buy NO (limit order, post_only) at implied no_price → 0 fee.
+  EDGE: Research shows YES longshots win ~35% less than priced → NO wins more.
 """
 
 import logging
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+import random
+from typing import Dict, List
 
 from config import (
-    KALSHI_TAKER_FEE_PCT, LONGSHOT_MAX_POS_PCT,
-    LONGSHOT_MAX_PRICE_CENTS, LONGSHOT_MIN_OPEN_INT,
-    LONGSHOT_MIN_PRICE_CENTS, STRATEGY_ALLOCATION,
+    LONGSHOT_MAX_PRICE_CENTS, LONGSHOT_MIN_PRICE_CENTS,
+    LONGSHOT_MAX_POS_PCT, STRATEGY_ALLOCATION,
 )
 from bond import days_to_close
 
 logger = logging.getLogger(__name__)
 
-# Kalshi category keywords → historical longshot fertility score
-CATEGORY_SCORES = {
-    "election":    0.90,
-    "president":   0.85,
-    "congress":    0.80,
-    "fed":         0.78,   # FOMC rate decisions
-    "cpi":         0.80,   # Inflation data — economists have edge
-    "inflation":   0.75,
-    "gdp":         0.72,
-    "unemployment":0.70,
-    "payroll":     0.72,
-    "employment":  0.72,
-    "bitcoin":     0.75,
-    "btc":         0.75,
-    "crypto":      0.65,
-    "ethereum":    0.68,
-    "xrp":         0.65,
-    "supreme":     0.80,
-    "arrest":      0.95,
-    "resign":      0.78,
-    "impeach":     0.82,
-    "tariff":      0.75,
-    "sanction":    0.70,
-    "trump":       0.80,
-    "executive":   0.72,
-    "senate":      0.75,
-    "house":       0.70,
-    "s&p":         0.68,
-    "nasdaq":      0.68,
-    "gold":        0.65,
-    "oil":         0.65,
-    "rate":        0.72,
+# Categories with strongest longshot overpricing (entertainment, celeb, tech milestones)
+STRONG_BIAS_CATEGORIES = {
+    "entertainment": 0.90, "award": 0.88, "oscar": 0.88, "grammy": 0.85,
+    "celebrity":     0.80, "viral": 0.78, "pop culture": 0.75,
+    "billboard":     0.80, "streaming": 0.72, "chart": 0.75,
+    "spacex":        0.75, "launch": 0.68, "ipo": 0.72,
+    "acquisition":   0.70, "merger": 0.68, "tech": 0.65,
+    "model":         0.70, "top ":  0.65,
 }
 
 
-def _category_score(market: Dict) -> float:
+def _fade_score(market: Dict) -> float:
     text = (market.get("title", "") + " " +
             market.get("subtitle", "") + " " +
             str(market.get("tags", []))).lower()
     best = 0.3
-    for kw, score in CATEGORY_SCORES.items():
+    for kw, score in STRONG_BIAS_CATEGORIES.items():
         if kw in text:
             best = max(best, score)
     return best
 
 
-def _price_momentum(history: List[Dict]) -> float:
-    """Positive momentum = price rising = someone accumulating."""
-    if len(history) < 4:
-        return 0.0
-    prices = [int(h.get("yes_price", 50)) for h in history if h.get("yes_price")]
-    if len(prices) < 4:
-        return 0.0
-    mid    = len(prices) // 2
-    recent = sum(prices[mid:]) / len(prices[mid:])
-    early  = sum(prices[:mid]) / len(prices[:mid])
-    if early < 1:
-        return 0.0
-    change = (recent - early) / early
-    return min(max(change, 0) * 3, 1.0)
-
-
 def scan(client, risk_manager, markets=None) -> List[Dict]:
-    logger.info("[LONGSHOT] Scanning Kalshi for asymmetric opportunities...")
+    logger.info("[LONGSHOT] Scanning for overpriced YES longshots to fade...")
     candidates = []
 
     if markets is None:
@@ -97,36 +62,30 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             logger.error(f"Market fetch failed: {e}")
             return []
 
-    open_markets = list(markets)  # API already returns open markets only
-    SPORTS_PREFIXES = ("KXMVE", "KXNCAAMB", "KXUCLGAME", "KXNCAAFB", "KXWTACHALLENGER",
-                       "KXNBA", "KXNFL", "KXMLB", "KXNHL", "KXMLS", "KXHOUSERACE")
+    open_markets = list(markets)
+    SKIP_PREFIXES = ("KXMVE", "KXNCAAMB", "KXUCLGAME", "KXNCAAFB",
+                     "KXNBA", "KXNFL", "KXMLB", "KXNHL", "KXMLS")
     open_markets = [m for m in open_markets
-                    if not m.get("ticker", "").startswith(SPORTS_PREFIXES)]
-    # Pass 1: filter by category score using cheap list data (title/tags available)
-    cat_filtered = [m for m in open_markets if _category_score(m) >= 0.35]
-    logger.info(f"[LONGSHOT] {len(cat_filtered)} markets pass category filter")
+                    if not m.get("ticker", "").startswith(SKIP_PREFIXES)]
 
-    # Cap at 50 individual fetches — 368 API calls crashes the bot
-    # Shuffle so we get variety across cycles rather than always the same markets
-    import random
-    if len(cat_filtered) > 50:
-        random.shuffle(cat_filtered)
-        cat_filtered = cat_filtered[:50]
-        logger.info(f"[LONGSHOT] Sampling 50 markets for price lookup this cycle")
+    bias_filtered = [m for m in open_markets if _fade_score(m) >= 0.4]
+    logger.info(f"[LONGSHOT] {len(bias_filtered)} markets in longshot-bias categories")
 
-    for m in cat_filtered:
+    if len(bias_filtered) > 40:
+        random.shuffle(bias_filtered)
+        bias_filtered = bias_filtered[:40]
+
+    for m in bias_filtered:
         ticker = m.get("ticker", "")
-
-        # Fetch individual market for price data
         try:
-            detail   = client.get_market(ticker)
-            md       = detail.get("market", detail)
+            detail = client.get_market(ticker)
+            md     = detail.get("market", detail)
         except Exception as e:
             logger.debug(f"[LONGSHOT] Detail fetch failed {ticker}: {e}")
             continue
 
         yes_ask = None
-        for field in ("yes_ask", "yes_bid", "last_price"):
+        for field in ("yes_ask", "last_price", "yes_bid"):
             v = md.get(field)
             if v is not None:
                 try:
@@ -142,43 +101,34 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             continue
 
         days = days_to_close(md) or days_to_close(m)
-        if days and days < 1:
+        if days is None or days < 0.5 or days > 60:
             continue
 
-        cat_score = _category_score(md)
+        fade_score   = _fade_score(md)
+        no_price     = 100 - yes_ask
+        true_yes_prob = (yes_ask / 100) * 0.65  # 35% discount for longshot bias
+        our_edge      = (1 - true_yes_prob) - (no_price / 100)
+        ev = our_edge
 
-        try:
-            history  = client.get_market_history(ticker)
-            momentum = _price_momentum(history)
-        except Exception:
-            momentum = 0.0
-
-        cat_premium = (cat_score - 0.5) * 0.3
-        our_prob    = min((yes_ask / 100) * (1 + cat_premium) + momentum * 0.05, 0.40)
-        payout_mult = 100 / yes_ask
-        ev          = our_prob * payout_mult - 1.0 - KALSHI_TAKER_FEE_PCT
-
-        if ev < 0.10:
+        if ev < 0.05:
             continue
 
         candidates.append({
-            "ticker":        ticker,
-            "title":         md.get("title", m.get("title", ""))[:80],
-            "yes_price":     yes_ask,
-            "payout_mult":   round(payout_mult, 1),
-            "our_prob":      round(our_prob, 3),
-            "ev":            round(ev, 3),
-            "cat_score":     cat_score,
-            "momentum":      momentum,
-            "open_interest": open_int,
+            "ticker":    ticker,
+            "title":     md.get("title", m.get("title", ""))[:80],
+            "yes_price": yes_ask,
+            "no_price":  no_price,
+            "fade_score": fade_score,
+            "ev":        round(ev, 3),
+            "days":      days,
         })
 
-    candidates.sort(key=lambda x: x["ev"] * x["cat_score"], reverse=True)
-    logger.info(f"[LONGSHOT] {len(candidates)} candidates")
+    candidates.sort(key=lambda x: x["ev"] * x["fade_score"], reverse=True)
+    logger.info(f"[LONGSHOT] {len(candidates)} fade candidates")
     for c in candidates[:5]:
         logger.info(
-            f"  ↳ {c['title'][:55]} | {c['yes_price']}¢ "
-            f"| {c['payout_mult']}x | ev={c['ev']:.2%} | cat={c['cat_score']:.2f}"
+            f"  ↳ FADE {c['title'][:50]} | YES@{c['yes_price']}¢ "
+            f"→ BUY NO@{c['no_price']}¢ | ev={c['ev']:.2%} | {c['days']:.1f}d"
         )
     return candidates
 
@@ -191,40 +141,37 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
         from config import STARTING_BANKROLL_USD
         balance = STARTING_BANKROLL_USD
 
-    strat_budget = balance * STRATEGY_ALLOCATION["longshot"]
+    strat_budget = balance * STRATEGY_ALLOCATION.get("longshot", 0.15)
 
     for c in candidates[:4]:
         per_trade = min(balance * LONGSHOT_MAX_POS_PCT, strat_budget / 3)
-        count     = client.contracts_for_budget(per_trade, c["yes_price"])
-        cost      = client.cost_usd(count, c["yes_price"])
+        count     = client.contracts_for_budget(per_trade, c["no_price"])
+        cost      = client.cost_usd(count, c["no_price"])
 
         if cost < 1.0:
             continue
 
         if not risk_manager.approve("longshot", c["ticker"], cost, c["ev"],
-                                     notes=c["title"][:45]):
+                                    notes=c["title"][:45]):
             continue
 
         try:
             client.place_limit_order(
-                ticker=c["ticker"],
-                side="yes",
-                action="buy",
-                price_cents=min(c["yes_price"] + 1, LONGSHOT_MAX_PRICE_CENTS + 2),
-                count=count,
+                ticker=c["ticker"], side="no", action="buy",
+                price_cents=c["no_price"], count=count, post_only=True,
             )
-            risk_manager.record_open(c["ticker"], count, c["yes_price"], "longshot")
+            risk_manager.record_open(c["ticker"], count, c["no_price"], "longshot", side="no")
             risk_manager.log_trade(
                 strategy="longshot", ticker=c["ticker"],
-                side="yes", action="buy",
-                price_cents=c["yes_price"], count=count,
+                side="no", action="buy",
+                price_cents=c["no_price"], count=count,
                 expected_pnl=cost * c["ev"],
-                notes=f"{c['payout_mult']}x ev={c['ev']:.2%}"
+                notes=f"fade YES@{c['yes_price']}¢ ev={c['ev']:.2%}"
             )
             trades += 1
             strat_budget -= cost
         except Exception as e:
             logger.error(f"[LONGSHOT] Order failed {c['ticker']}: {e}")
 
-    logger.info(f"[LONGSHOT] Placed {trades} trade(s)")
+    logger.info(f"[LONGSHOT] Placed {trades} fade trade(s)")
     return trades

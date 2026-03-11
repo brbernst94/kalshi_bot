@@ -84,7 +84,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
     time_filtered = []
     for m in open_markets:
         days = days_to_close(m)
-        if days is None or (0.3 <= days <= BOND_MAX_DAYS):
+        if days is None or (0.1 <= days <= BOND_MAX_DAYS):
             time_filtered.append(m)
 
     logger.info(f"[BOND] {len(time_filtered)} markets within {BOND_MAX_DAYS}-day window")
@@ -94,6 +94,9 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         return []
 
     # Pass 2: fetch individual market details for price data
+    # Research finding: 90-99¢ contracts win MORE than priced → best edge tier
+    # 80-90¢ contracts are roughly fair with small positive edge as maker
+    # Using maker (limit) orders = 0% fee vs 1.4% taker fee at 80¢
     for m in time_filtered:
         ticker = m.get("ticker", "")
         try:
@@ -105,19 +108,27 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
 
         days = days_to_close(market_data) or days_to_close(m)
         if days is None:
-            days = 7  # assume week if unknown — safer to include than exclude
+            days = 7
 
         yes_price_cents = get_yes_price(market_data)
         if yes_price_cents is None or yes_price_cents == 0:
             continue
+
+        # Two tiers based on research:
+        # Tier 1 (BEST): 90-98¢ — near-certainty, wins 98% of time per research
+        # Tier 2: BOND_MIN_PRICE_CENTS–90¢ — solid favorites
         if yes_price_cents < BOND_MIN_PRICE_CENTS or yes_price_cents >= 99:
             continue
 
+        # Use maker fee (0%) not taker fee — we always post limit orders
+        MAKER_FEE = 0.0
         gross_return = (100 - yes_price_cents) / yes_price_cents
-        net_return   = gross_return - KALSHI_TAKER_FEE_PCT
-        if net_return < 0.02:
+        net_return   = gross_return - MAKER_FEE  # 0 fee as maker!
+        if net_return < 0.01:
             continue
+
         annualised = ((1 + net_return) ** (365 / max(days, 1))) - 1
+        tier = 1 if yes_price_cents >= 90 else 2
 
         candidates.append({
             "ticker":        ticker,
@@ -127,13 +138,15 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             "net_return":    net_return,
             "annualised":    annualised,
             "days":          days,
+            "tier":          tier,
         })
 
-    candidates.sort(key=lambda x: x["net_return"], reverse=True)
+    # Sort tier 1 first, then by net return
+    candidates.sort(key=lambda x: (-x["tier"], -x["net_return"]))
     logger.info(f"[BOND] {len(candidates)} candidates")
     for c in candidates[:4]:
         logger.info(
-            f"  ↳ {c['title'][:55]} | {c['yes_price']}¢ "
+            f"  ↳ [{c['tier']}] {c['title'][:50]} | {c['yes_price']}¢ "
             f"| net={c['net_return']:.2%} | ann={c['annualised']:.0%} "
             f"| {c['days']:.1f}d"
         )

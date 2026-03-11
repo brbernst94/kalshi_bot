@@ -31,6 +31,7 @@ import whale as whale_strat
 import longshot as longshot_strat
 import fade as fade_strat
 import bond as bond_strat
+import datarelease as datarelease_strat
 from config import (
     WHALE_SCAN_MINS, FADE_SCAN_MINS,
     BOND_SCAN_MINS, LONGSHOT_SCAN_MINS, MONITOR_SCAN_MINS
@@ -84,6 +85,12 @@ def run_longshot():
     markets = get_cached_markets()
     c = longshot_strat.scan(client, risk_manager, markets)
     if not DRY_RUN: longshot_strat.execute(client, risk_manager, c)
+
+def run_datarelease():
+    logger.info("━━━ DATA RELEASE CYCLE ━━━")
+    markets = get_cached_markets()
+    c = datarelease_strat.scan(client, risk_manager, markets)
+    if not DRY_RUN: datarelease_strat.execute(client, risk_manager, c)
 
 def run_monitor():
     global cycle
@@ -165,6 +172,7 @@ def main():
     schedule.every(FADE_SCAN_MINS).minutes.do(run_fade)
     schedule.every(BOND_SCAN_MINS).minutes.do(run_bond)
     schedule.every(LONGSHOT_SCAN_MINS).minutes.do(run_longshot)
+    schedule.every(5).minutes.do(run_datarelease)
     schedule.every(MONITOR_SCAN_MINS).minutes.do(run_monitor)
 
     # Daily analysis at 00:15 UTC — after midnight reset, before first trades
@@ -176,6 +184,7 @@ def main():
     run_whale()
     run_bond()
     run_longshot()
+    run_datarelease()
     run_fade()
     run_monitor()
 
