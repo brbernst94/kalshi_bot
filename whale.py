@@ -91,10 +91,8 @@ def fetch_large_fills(client) -> List[Dict]:
             sports_skipped += 1
             continue
 
-        # For untracked members, only follow known high-edge categories
-        if not is_tracked and not ticker.startswith(HIGH_EDGE_PREFIXES):
-            sports_skipped += 1
-            continue
+        # Accept everything else — don't over-restrict to allowlist
+        # (financial, crypto, political, policy markets all have edge)
 
         price = int(t.get("yes_price", t.get("no_price", 50)))
         side  = t.get("taker_side", "yes")
