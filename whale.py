@@ -41,7 +41,7 @@ def fetch_large_fills(client) -> List[Dict]:
     """
     large_fills = []
     try:
-        markets = client.get_all_open_markets(max_pages=8)
+        markets = client.get_all_open_markets()
     except Exception as e:
         logger.error(f"[WHALE] Market fetch failed: {e}")
         return []

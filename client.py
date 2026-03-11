@@ -255,10 +255,13 @@ class KalshiClient:
 
         logger.info(f"[CLIENT] {len(good_events)} non-KXMVE events, {kxmve_skipped} KXMVE skipped, {len(markets_by_ticker)} embedded markets")
 
-        # Step 3: If no embedded markets, fetch per-event (no sleep — these are fast)
+        # Step 3: If no embedded markets, fetch per-event (cap at 300 most active)
         if not markets_by_ticker and good_events:
-            logger.info(f"[CLIENT] No embedded markets — fetching per event ({len(good_events)} events)")
-            for event in good_events:
+            # Sort by volume so we hit the most liquid markets first
+            good_events.sort(key=lambda e: int(e.get("volume", 0) or 0), reverse=True)
+            fetch_events = good_events[:300]
+            logger.info(f"[CLIENT] No embedded markets — fetching per event (top {len(fetch_events)} by volume)")
+            for event in fetch_events:
                 eticker = event.get("event_ticker", event.get("ticker", ""))
                 try:
                     mresp = self.get_markets(limit=100, event_ticker=eticker)

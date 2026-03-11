@@ -79,11 +79,11 @@ STRATEGY_ALLOCATION = {
 }
 
 # ── Scheduling ────────────────────────────────────────────────────────────────
-WHALE_SCAN_MINS    = 10
-FADE_SCAN_MINS     = 1
-BOND_SCAN_MINS     = 1
-LONGSHOT_SCAN_MINS = 1
-MONITOR_SCAN_MINS  = 1
+WHALE_SCAN_MINS    = 3
+FADE_SCAN_MINS     = 3
+BOND_SCAN_MINS     = 3
+LONGSHOT_SCAN_MINS = 3
+MONITOR_SCAN_MINS  = 3
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_LEVEL      = "DEBUG"
