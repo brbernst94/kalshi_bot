@@ -271,8 +271,8 @@ class KalshiClient:
                 except Exception:
                     continue
 
-        # Step 4: Final fallback — paginate /markets directly, skip KXMVE/KXMVECROSS
-        # Used when events API returns no open markets (e.g. event volume field absent)
+        # Step 4: Final fallback — paginate /markets directly (no KXMVE filter here —
+        # there are 10k+ KXMVE markets sorted first; bond/longshot criteria exclude them naturally)
         if not markets_by_ticker:
             logger.info("[CLIENT] Per-event fallback returned 0 — paginating /markets directly")
             cursor = None
@@ -284,15 +284,12 @@ class KalshiClient:
                         break
                     added = 0
                     for m in page_markets:
-                        t = m.get("ticker", "")
-                        if t.startswith("KXMVE") or t.startswith("KXMVECROSS"):
-                            continue
                         if m.get("status") == "open":
-                            markets_by_ticker[t] = m
+                            markets_by_ticker[m.get("ticker", "")] = m
                             added += 1
-                    logger.info(f"[CLIENT] Direct page {page+1}: {added} non-KXMVE markets added")
+                    logger.info(f"[CLIENT] Direct page {page+1}: {added} markets added (total {len(markets_by_ticker)})")
                     cursor = resp.get("cursor")
-                    if not cursor:
+                    if not cursor or len(markets_by_ticker) >= 2000:
                         break
                     time.sleep(0.1)
                 except Exception as e:

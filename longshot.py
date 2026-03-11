@@ -80,7 +80,10 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             return []
 
     open_markets = [m for m in markets if m.get("status") == "open"]
-
+    SPORTS_PREFIXES = ("KXMVE", "KXNCAAMB", "KXUCLGAME", "KXNCAAFB", "KXWTACHALLENGER",
+                       "KXNBA", "KXNFL", "KXMLB", "KXNHL", "KXMLS", "KXHOUSERACE")
+    open_markets = [m for m in open_markets
+                    if not m.get("ticker", "").startswith(SPORTS_PREFIXES)]
     # Pass 1: filter by category score using cheap list data (title/tags available)
     cat_filtered = [m for m in open_markets if _category_score(m) >= 0.50]
     logger.info(f"[LONGSHOT] {len(cat_filtered)} markets pass category filter")

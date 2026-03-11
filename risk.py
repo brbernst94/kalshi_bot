@@ -74,12 +74,28 @@ class RiskManager:
         """Sync open_positions from actual API positions to survive redeployments."""
         try:
             api_positions = self.client.get_positions()
-            api_tickers   = {p.get("ticker") for p in api_positions if int(p.get("position", 0)) != 0}
-            # Remove any in-memory positions no longer held
+            # Kalshi uses 'net_position' not 'position'
+            api_tickers = {
+                p.get("ticker") or p.get("market_ticker", "")
+                for p in api_positions
+                if int(p.get("net_position", p.get("position", 0)) or 0) != 0
+            }
             stale = [t for t in list(self.open_positions) if t not in api_tickers]
             for t in stale:
                 logger.info(f"[RISK] Pruning stale position {t} (not in API)")
                 self.open_positions.pop(t, None)
+            # Add any API positions we don't have in memory
+            for p in api_positions:
+                t = p.get("ticker") or p.get("market_ticker", "")
+                net = int(p.get("net_position", p.get("position", 0)) or 0)
+                if net != 0 and t and t not in self.open_positions:
+                    self.open_positions[t] = {
+                        "count":       abs(net),
+                        "entry_cents": 50,
+                        "strategy":    "unknown",
+                        "opened_at":   __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+                    }
+                    logger.info(f"[RISK] Restored position {t} from API (net={net})")
         except Exception as e:
             logger.debug(f"[RISK] Position sync failed: {e}")
 

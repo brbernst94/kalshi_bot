@@ -40,29 +40,29 @@ CONTRACT_VALUE_USD     = 1.00      # Each contract pays $1.00 at resolution
 STARTING_BANKROLL_USD    = 500.00
 MAX_SINGLE_POSITION_PCT  = 0.25    # Up to 25% on one high-conviction trade
 MAX_DAILY_LOSS_PCT       = 0.20    # Hard stop if down 20% in a day
-MAX_OPEN_POSITIONS       = 4       # Concentrated book
-
+MAX_OPEN_POSITIONS       = 8       # Increased from 4 — allow more simultaneous positions
+MAX_SINGLE_POSITION_PCT  = 0.20   # Max 20% per position
 # Minimum NET edge after fees (need more than 1% just to break even)
 MIN_NET_EDGE             = 0.02   # 3.5% net edge minimum
 
 # ── Strategy-specific ─────────────────────────────────────────────────────────
 
 # Bond: near-certain YES contracts
-BOND_MIN_PRICE_CENTS  = 82         # Only buy YES ≥ 90¢
-BOND_MAX_DAYS         = 30         # Resolve within 14 days
+BOND_MIN_PRICE_CENTS  = 70         # Buy YES ≥ 70¢ (was 82 — too restrictive)
+BOND_MAX_DAYS         = 30         # Resolve within 30 days
 BOND_MAX_POSITION_PCT = 0.25
 
 # Whale following
-WHALE_MIN_CONTRACTS      = 50     # Only copy trades of ≥ 200 contracts
+WHALE_MIN_CONTRACTS      = 50     # Only copy trades of ≥ 50 contracts
 WHALE_COPY_DELAY_SECS    = 45
 WHALE_MAX_COPY_FRAC      = 0.20    # Copy at 20% of whale's contract count
 WHALE_MIN_WIN_RATE       = 0.65
 TRACKED_WHALE_MEMBERS    = []      # Kalshi member IDs — populate from leaderboard
 
 # Asymmetric longshot
-LONGSHOT_MAX_PRICE_CENTS = 20      # Buy YES ≤ 14¢ (7x+ payout)
+LONGSHOT_MAX_PRICE_CENTS = 20      # Buy YES ≤ 20¢ (5x+ payout)
 LONGSHOT_MIN_PRICE_CENTS = 2
-LONGSHOT_MIN_OPEN_INT    = 100     # Needs real open interest
+LONGSHOT_MIN_OPEN_INT    = 0       # Removed — open_interest is always 0 in list data
 LONGSHOT_MAX_POS_PCT     = 0.08
 
 # Fade / overcorrection
