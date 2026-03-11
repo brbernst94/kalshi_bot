@@ -167,12 +167,14 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
             continue
 
         try:
+            # Fade uses taker — overcorrections reverse quickly, need immediate fill
             client.place_limit_order(
                 ticker=c["ticker"],
                 side=c["fade_side"],
                 action="buy",
                 price_cents=c["entry_cents"],
                 count=count,
+                post_only=False,
             )
             risk_manager.record_open(c["ticker"], count, c["entry_cents"], "fade")
             risk_manager.log_trade(

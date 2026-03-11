@@ -245,12 +245,15 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
         entry_price = current or c["price_cents"]
 
         try:
+            # Whale uses taker order (immediate fill) — edge is speed, not fee savings.
+            # A 45s-delayed maker order risks missing the move entirely.
             client.place_limit_order(
                 ticker=c["ticker"],
                 side=c["side"],
                 action=c["action"],
                 price_cents=entry_price,
                 count=copy_count,
+                post_only=False,  # taker — fill immediately
             )
             _recent_copies[c["ticker"]] = {"copied_at": datetime.now(timezone.utc)}
             risk_manager.record_open(c["ticker"], copy_count, entry_price, "whale", side=c["side"])
