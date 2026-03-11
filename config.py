@@ -43,30 +43,30 @@ MAX_DAILY_LOSS_PCT       = 0.20    # Hard stop if down 20% in a day
 MAX_OPEN_POSITIONS       = 4       # Concentrated book
 
 # Minimum NET edge after fees (need more than 1% just to break even)
-MIN_NET_EDGE             = 0.035   # 3.5% net edge minimum
+MIN_NET_EDGE             = 0.02   # 3.5% net edge minimum
 
 # ── Strategy-specific ─────────────────────────────────────────────────────────
 
 # Bond: near-certain YES contracts
-BOND_MIN_PRICE_CENTS  = 90         # Only buy YES ≥ 90¢
-BOND_MAX_DAYS         = 14         # Resolve within 14 days
+BOND_MIN_PRICE_CENTS  = 82         # Only buy YES ≥ 90¢
+BOND_MAX_DAYS         = 30         # Resolve within 14 days
 BOND_MAX_POSITION_PCT = 0.25
 
 # Whale following
-WHALE_MIN_CONTRACTS      = 200     # Only copy trades of ≥ 200 contracts
+WHALE_MIN_CONTRACTS      = 50     # Only copy trades of ≥ 200 contracts
 WHALE_COPY_DELAY_SECS    = 45
 WHALE_MAX_COPY_FRAC      = 0.20    # Copy at 20% of whale's contract count
 WHALE_MIN_WIN_RATE       = 0.65
 TRACKED_WHALE_MEMBERS    = []      # Kalshi member IDs — populate from leaderboard
 
 # Asymmetric longshot
-LONGSHOT_MAX_PRICE_CENTS = 14      # Buy YES ≤ 14¢ (7x+ payout)
+LONGSHOT_MAX_PRICE_CENTS = 20      # Buy YES ≤ 14¢ (7x+ payout)
 LONGSHOT_MIN_PRICE_CENTS = 2
-LONGSHOT_MIN_OPEN_INT    = 500     # Needs real open interest
+LONGSHOT_MIN_OPEN_INT    = 100     # Needs real open interest
 LONGSHOT_MAX_POS_PCT     = 0.08
 
 # Fade / overcorrection
-FADE_SPIKE_CENTS         = 15      # Only fade moves ≥ 15¢ in 1 hour
+FADE_SPIKE_CENTS         = 8      # Only fade moves ≥ 15¢ in 1 hour
 FADE_CONFIRMATION_HOURS  = 0.5
 FADE_MAX_POS_PCT         = 0.22
 
