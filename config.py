@@ -79,14 +79,14 @@ STRATEGY_ALLOCATION = {
 }
 
 # ── Scheduling ────────────────────────────────────────────────────────────────
-WHALE_SCAN_MINS    = 5
-FADE_SCAN_MINS     = 8
-BOND_SCAN_MINS     = 30
-LONGSHOT_SCAN_MINS = 60
-MONITOR_SCAN_MINS  = 10
+WHALE_SCAN_MINS    = 10
+FADE_SCAN_MINS     = 1
+BOND_SCAN_MINS     = 1
+LONGSHOT_SCAN_MINS = 1
+MONITOR_SCAN_MINS  = 1
 
 # ── Logging ───────────────────────────────────────────────────────────────────
-LOG_LEVEL      = "INFO"
+LOG_LEVEL      = "DEBUG"
 LOG_FILE       = "logs/bot.log"
 TRADE_LOG_FILE = "logs/trades.csv"
 
