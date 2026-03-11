@@ -106,6 +106,14 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
     cat_filtered = [m for m in open_markets if _category_score(m) >= 0.35]
     logger.info(f"[LONGSHOT] {len(cat_filtered)} markets pass category filter")
 
+    # Cap at 50 individual fetches — 368 API calls crashes the bot
+    # Shuffle so we get variety across cycles rather than always the same markets
+    import random
+    if len(cat_filtered) > 50:
+        random.shuffle(cat_filtered)
+        cat_filtered = cat_filtered[:50]
+        logger.info(f"[LONGSHOT] Sampling 50 markets for price lookup this cycle")
+
     for m in cat_filtered:
         ticker = m.get("ticker", "")
 

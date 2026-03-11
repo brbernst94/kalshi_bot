@@ -49,8 +49,8 @@ MIN_NET_EDGE             = 0.02   # 3.5% net edge minimum
 # ── Strategy-specific ─────────────────────────────────────────────────────────
 
 # Bond: near-certain YES contracts
-BOND_MIN_PRICE_CENTS  = 70         # Buy YES ≥ 70¢ (was 82 — too restrictive)
-BOND_MAX_DAYS         = 30         # Resolve within 30 days
+BOND_MIN_PRICE_CENTS  = 65         # Buy YES ≥ 65¢
+BOND_MAX_DAYS         = 90         # Resolve within 90 days
 BOND_MAX_POSITION_PCT = 0.25
 
 # Whale following

@@ -176,28 +176,23 @@ class KalshiClient:
     # ── Account ───────────────────────────────────────────────────────────────
 
     def get_balance(self) -> float:
-        """Returns total portfolio value: cash + current value of open positions."""
-        data  = self._get("/portfolio/balance")
-        cash  = round(data.get("balance", 0) / 100, 2)
+        """Returns total portfolio value: cash + value of open positions."""
+        data = self._get("/portfolio/balance")
+        cash = round(data.get("balance", 0) / 100, 2)
 
-        # Add current market value of open positions
+        # Add current value of open positions from the portfolio endpoint
         try:
-            positions = self.get_positions()
+            pos_data = self._get("/portfolio/positions")
+            positions = pos_data.get("market_positions", [])
             position_value = 0.0
             for p in positions:
-                net = int(p.get("net_position", 0))
-                if net == 0:
-                    continue
-                # value = contracts × current_yes_price (for YES) or (100-yes) for NO
-                yes_price = int(p.get("market_exposure", p.get("value", 0)))
-                # Kalshi returns `value` field in cents for the position
-                value_cents = abs(int(p.get("value", 0)))
-                position_value += value_cents / 100
+                # Kalshi returns `value` in cents — the current market value
+                v = p.get("value") or p.get("market_value") or 0
+                position_value += abs(int(v)) / 100
         except Exception:
             position_value = 0.0
 
-        total = cash + position_value
-        return round(total, 2)
+        return round(cash + position_value, 2)
 
     def get_positions(self) -> List[Dict]:
         data = self._get("/portfolio/positions")
