@@ -40,8 +40,9 @@ CONTRACT_VALUE_USD     = 1.00      # Each contract pays $1.00 at resolution
 STARTING_BANKROLL_USD    = 500.00
 MAX_SINGLE_POSITION_PCT  = 0.25    # Up to 25% on one high-conviction trade
 MAX_DAILY_LOSS_PCT       = 0.20    # Hard stop if down 20% in a day
-MAX_OPEN_POSITIONS       = 8       # Increased from 4 — allow more simultaneous positions
 MAX_SINGLE_POSITION_PCT  = 0.20   # Max 20% per position
+MAX_DAILY_LOSS_PCT       = 0.10    # Hard stop if down 10% in a day (was 20% — too loose)
+MAX_OPEN_POSITIONS       = 4       # Back to 4 — prevents overexposure on correlated sports bets
 # Minimum NET edge after fees (need more than 1% just to break even)
 MIN_NET_EDGE             = 0.02   # 3.5% net edge minimum
 

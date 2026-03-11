@@ -25,10 +25,11 @@ logger = logging.getLogger(__name__)
 
 class RiskManager:
     def __init__(self, client):
-        self.client         = client
-        self.daily_pnl      = 0.0
-        self.daily_date     = date.today()
-        self.open_positions = {}   # ticker -> {count, entry_cents, strategy, opened_at}
+        self.client            = client
+        self.daily_pnl         = 0.0
+        self.daily_date        = date.today()
+        self.open_positions    = {}
+        self._recently_closed  = set()   # tickers closed this session, don't re-add from API
         self._init_log()
 
     def _reset_daily(self):
@@ -88,7 +89,7 @@ class RiskManager:
             for p in api_positions:
                 t = p.get("ticker") or p.get("market_ticker", "")
                 net = int(p.get("net_position", p.get("position", 0)) or 0)
-                if net != 0 and t and t not in self.open_positions:
+                if net != 0 and t and t not in self.open_positions and t not in self._recently_closed:
                     self.open_positions[t] = {
                         "count":       abs(net),
                         "entry_cents": 50,
@@ -155,17 +156,19 @@ class RiskManager:
         return max(1, int(budget * 100 / max(price_cents, 1)))
 
     def record_open(self, ticker: str, count: int,
-                    entry_cents: int, strategy: str):
+                    entry_cents: int, strategy: str, side: str = "yes"):
         self.open_positions[ticker] = {
             "count":       count,
             "entry_cents": entry_cents,
             "strategy":    strategy,
+            "side":        side,
             "opened_at":   datetime.now(timezone.utc),
         }
 
     def record_close(self, ticker: str, exit_cents: int) -> float:
         if ticker not in self.open_positions:
             return 0.0
+        self._recently_closed.add(ticker)
         pos   = self.open_positions.pop(ticker)
         count = pos["count"]
         # PnL = (exit - entry) × count / 100  (converting cents to dollars)

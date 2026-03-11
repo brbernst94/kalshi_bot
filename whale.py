@@ -175,15 +175,10 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
     strat_budget = balance * STRATEGY_ALLOCATION["whale"]
 
     for c in candidates[:2]:
-        # Size up: use a meaningful fraction of strategy budget, not just 20% of 20%
-        per_trade_budget = min(balance * 0.15, strat_budget * 0.5)  # up to 15% of balance
-        copy_count = max(1, int(c["count"] * WHALE_MAX_COPY_FRAC * c["confidence"]))
-        cost       = client.cost_usd(copy_count, c["price_cents"])
-        # If copy_count gives a tiny cost, size up to the budget
-        if cost < per_trade_budget * 0.5:
-            copy_count = max(copy_count, int(per_trade_budget * 100 / max(c["price_cents"], 1)))
-        cost       = min(client.cost_usd(copy_count, c["price_cents"]), per_trade_budget)
-        copy_count = max(1, int(cost * 100 / max(c["price_cents"], 1)))
+        # Conservative sizing: hard cap at $8/trade (5% of $150 balance)
+        # Prevents correlated sports losses from wiping account
+        max_per_trade = min(balance * 0.05, 8.0)
+        copy_count = max(1, int(max_per_trade * 100 / max(c["price_cents"], 1)))
         cost       = client.cost_usd(copy_count, c["price_cents"])
 
         if cost < 2.0:
@@ -221,7 +216,7 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
                 count=copy_count,
             )
             _recent_copies[c["ticker"]] = {"copied_at": datetime.now(timezone.utc)}
-            risk_manager.record_open(c["ticker"], copy_count, entry_price, "whale")
+            risk_manager.record_open(c["ticker"], copy_count, entry_price, "whale", side=c["side"])
             risk_manager.log_trade(
                 strategy="whale", ticker=c["ticker"],
                 side=c["side"], action=c["action"],

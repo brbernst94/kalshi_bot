@@ -250,14 +250,14 @@ class KalshiClient:
                 continue
             good_events.append(event)
             for m in event.get("markets", []):
-                if m.get("status") == "open":
-                    markets_by_ticker[m["ticker"]] = m
+                t = m.get("ticker", "")
+                if t:
+                    markets_by_ticker[t] = m
 
         logger.info(f"[CLIENT] {len(good_events)} non-KXMVE events, {kxmve_skipped} KXMVE skipped, {len(markets_by_ticker)} embedded markets")
 
         # Step 3: If no embedded markets, fetch per-event (cap at 300 most active)
         if not markets_by_ticker and good_events:
-            # Sort by volume so we hit the most liquid markets first
             good_events.sort(key=lambda e: int(e.get("volume", 0) or 0), reverse=True)
             fetch_events = good_events[:300]
             logger.info(f"[CLIENT] No embedded markets — fetching per event (top {len(fetch_events)} by volume)")
@@ -266,8 +266,9 @@ class KalshiClient:
                 try:
                     mresp = self.get_markets(limit=100, event_ticker=eticker)
                     for m in mresp.get("markets", []):
-                        if m.get("status") == "open":
-                            markets_by_ticker[m["ticker"]] = m
+                        t = m.get("ticker", "")
+                        if t:
+                            markets_by_ticker[t] = m
                 except Exception:
                     continue
 
@@ -284,8 +285,9 @@ class KalshiClient:
                         break
                     added = 0
                     for m in page_markets:
-                        if m.get("status") == "open":
-                            markets_by_ticker[m.get("ticker", "")] = m
+                        t = m.get("ticker", "")
+                        if t:  # API already filtered status=open, trust it
+                            markets_by_ticker[t] = m
                             added += 1
                     logger.info(f"[CLIENT] Direct page {page+1}: {added} markets added (total {len(markets_by_ticker)})")
                     cursor = resp.get("cursor")
