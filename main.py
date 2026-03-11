@@ -52,7 +52,7 @@ def get_cached_markets():
     global _market_cache, _market_cache_time
     import time
     now = time.time()
-    if now - _market_cache_time > 55:   # refresh every 55 seconds
+    if now - _market_cache_time > 300:   # refresh every 5 minutes
         try:
             _market_cache      = client.get_all_open_markets()
             _market_cache_time = now

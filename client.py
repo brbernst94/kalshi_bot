@@ -215,84 +215,63 @@ class KalshiClient:
     def get_all_open_markets(self) -> List[Dict]:
         """
         Fetch all open markets via the /events endpoint.
-        Events are the correct grouping layer — each event holds ~1-10 markets
-        with price data populated. Skips KXMVE sports parlay events.
-        
-        This is the approach used by production Kalshi bots (e.g. OctagonAI).
-        /series and raw /markets pagination are both unreliable for getting prices.
+        Events are the correct grouping layer — each event holds ~1-10 markets.
+        Skips KXMVE sports parlay events.
         """
         markets_by_ticker: dict = {}
-        cursor = None
-        event_count = 0
         kxmve_skipped = 0
 
-        for page in range(50):  # up to 50 pages of events (200/page = 10,000 events max)
+        # Step 1: Collect all events (just 2-3 API calls for ~400 events)
+        all_events = []
+        cursor = None
+        for page in range(10):
             try:
                 resp   = self.get_events(limit=200, cursor=cursor)
                 events = resp.get("events", [])
                 if not events:
                     break
-
-                for event in events:
-                    eticker = event.get("event_ticker", event.get("ticker", ""))
-                    # Skip KXMVE sports parlays
-                    if eticker.startswith("KXMVE"):
-                        kxmve_skipped += 1
-                        continue
-
-                    event_count += 1
-                    # Markets are sometimes embedded in the event object
-                    embedded = event.get("markets", [])
-                    for m in embedded:
-                        if m.get("status") == "open":
-                            markets_by_ticker[m["ticker"]] = m
-
+                all_events.extend(events)
                 cursor = resp.get("cursor")
                 if not cursor:
                     break
-                time.sleep(0.05)
-
+                time.sleep(0.1)
             except Exception as e:
-                logger.error(f"[CLIENT] Events fetch failed (page {page}): {e}")
+                logger.error(f"[CLIENT] Events page {page} failed: {e}")
                 break
 
-        result = list(markets_by_ticker.values())
+        logger.info(f"[CLIENT] {len(all_events)} total events fetched")
 
-        # If events don't embed markets, fetch per event (some API versions)
-        if not result and event_count > 0:
-            logger.info(f"[CLIENT] Events found but no embedded markets — fetching per event")
-            # Re-fetch events and get markets per event_ticker
-            cursor = None
-            for page in range(50):
+        # Step 2: Filter out KXMVE, extract any embedded markets
+        good_events = []
+        for event in all_events:
+            eticker = event.get("event_ticker", event.get("ticker", ""))
+            if eticker.startswith("KXMVE"):
+                kxmve_skipped += 1
+                continue
+            good_events.append(event)
+            for m in event.get("markets", []):
+                if m.get("status") == "open":
+                    markets_by_ticker[m["ticker"]] = m
+
+        logger.info(f"[CLIENT] {len(good_events)} non-KXMVE events, {kxmve_skipped} KXMVE skipped, {len(markets_by_ticker)} embedded markets")
+
+        # Step 3: If no embedded markets, fetch per-event (no sleep — these are fast)
+        if not markets_by_ticker and good_events:
+            logger.info(f"[CLIENT] No embedded markets — fetching per event ({len(good_events)} events)")
+            for event in good_events:
+                eticker = event.get("event_ticker", event.get("ticker", ""))
                 try:
-                    resp   = self.get_events(limit=200, cursor=cursor)
-                    events = resp.get("events", [])
-                    if not events:
-                        break
-                    for event in events:
-                        eticker = event.get("event_ticker", event.get("ticker", ""))
-                        if eticker.startswith("KXMVE"):
-                            continue
-                        try:
-                            mresp  = self.get_markets(limit=100, event_ticker=eticker)
-                            for m in mresp.get("markets", []):
-                                if m.get("status") == "open":
-                                    markets_by_ticker[m["ticker"]] = m
-                            time.sleep(0.05)
-                        except Exception:
-                            continue
-                    cursor = resp.get("cursor")
-                    if not cursor:
-                        break
-                    time.sleep(0.05)
-                except Exception as e:
-                    logger.error(f"[CLIENT] Per-event fetch failed: {e}")
-                    break
-            result = list(markets_by_ticker.values())
+                    mresp = self.get_markets(limit=100, event_ticker=eticker)
+                    for m in mresp.get("markets", []):
+                        if m.get("status") == "open":
+                            markets_by_ticker[m["ticker"]] = m
+                except Exception:
+                    continue
 
+        result = list(markets_by_ticker.values())
         logger.info(
             f"[CLIENT] get_all_open_markets → {len(result)} open markets "
-            f"from {event_count} events ({kxmve_skipped} KXMVE skipped)"
+            f"from {len(good_events)} events ({kxmve_skipped} KXMVE skipped)"
         )
         return result
     def get_market(self, ticker: str) -> Dict:
