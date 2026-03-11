@@ -54,11 +54,19 @@ BOND_MAX_DAYS         = 30         # Resolve within 30 days
 BOND_MAX_POSITION_PCT = 0.25
 
 # Whale following
-WHALE_MIN_CONTRACTS      = 50     # Only copy trades of ≥ 50 contracts
+WHALE_MIN_CONTRACTS      = 50
 WHALE_COPY_DELAY_SECS    = 45
-WHALE_MAX_COPY_FRAC      = 0.20    # Copy at 20% of whale's contract count
+WHALE_MAX_COPY_FRAC      = 0.20
 WHALE_MIN_WIN_RATE       = 0.65
-TRACKED_WHALE_MEMBERS    = []      # Kalshi member IDs — populate from leaderboard
+# ↓ POPULATE THIS — go to kalshi.com/leaderboard, sort by "Profit", copy the
+#   username/member-ID from the URL of each top trader's profile page.
+#   e.g. if profile URL is kalshi.com/profile/traderguy123, add "traderguy123"
+#   Tracked members bypass the sports/category filter and get better sizing.
+TRACKED_WHALE_MEMBERS    = [
+    # "member_id_1",
+    # "member_id_2",
+    # "member_id_3",
+]
 
 # Asymmetric longshot
 LONGSHOT_MAX_PRICE_CENTS = 20      # Buy YES ≤ 20¢ (5x+ payout)

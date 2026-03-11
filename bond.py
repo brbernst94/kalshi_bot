@@ -68,10 +68,14 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             return []
 
     open_markets = [m for m in markets if m.get("status") == "open"]
-    # Pre-filter: skip sports parlays (KXMVE, KXNCAAMB, KXUCLGAME etc) — bond doesn't trade sports
-    SPORTS_PREFIXES = ("KXMVE", "KXNCAAMB", "KXUCLGAME", "KXNCAAFB", "KXWTACHALLENGER",
-                       "KXNBA", "KXNFL", "KXMLB", "KXNHL", "KXMLS", "KXNCAAMB",
-                       "KXHOUSERACE", "KXSENRACE")
+    # Pre-filter: skip sports — bond strategy targets policy/financial/economic markets
+    SPORTS_PREFIXES = (
+        "KXNCAAMB", "KXNCAAFB", "KXNCAAWB", "KXUCLGAME",
+        "KXWTAMATCH", "KXATPMATCH", "KXWTACHALLENGER",
+        "KXNHLWEST", "KXNHLEAST", "KXNHLGAME",
+        "KXNBA", "KXNBAGAME", "KXNFL", "KXNFLGAME",
+        "KXMLB", "KXMLS", "KXNCAAMBSPREAD", "KXNCAAMBTOTAL", "KXNCAAMBGAME",
+    )
     open_markets = [m for m in open_markets
                     if not m.get("ticker", "").startswith(SPORTS_PREFIXES)]
     logger.info(f"[BOND] {len(markets)} total markets, {len(open_markets)} open after sports filter")

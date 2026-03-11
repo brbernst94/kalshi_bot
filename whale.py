@@ -36,41 +36,80 @@ def _cost_usd(count: int, price_cents: int) -> float:
 
 def fetch_large_fills(client) -> List[Dict]:
     """
-    Pull recent large trades from the global /markets/trades endpoint.
-    Much faster than per-market polling — single API call gets all recent fills.
-    Filter to fills ≥ WHALE_MIN_CONTRACTS.
+    Pull recent large trades — only from high-edge markets.
+    Sports excluded (near-50/50 mid-game, correlated losses).
+    Financial, crypto, political markets kept (real info asymmetry).
+    Tracked whale members bypass the filter entirely.
     """
+    HIGH_EDGE_PREFIXES = (
+        "KXBTCD", "KXETHD", "KXXRPD", "KXSOLD",   # Crypto prices
+        "KXFED", "KXFEDDECISION",                   # Fed rate
+        "KXCPI", "KXPCE", "KXGDP", "KXUNRATE",     # Economic data
+        "KXNFP", "KXSPX", "KXNAS", "KXDOW",        # Markets/jobs
+        "KXGOLD", "KXOIL",                           # Commodities
+        "KXPRES", "KXTXRUN", "KXTRUMP",             # Political
+        "KXCONGRESS", "KXSUPREME", "KXELECTION",    # Gov/courts
+        "KXACAREPEAL", "KXSPACEX", "KXIPORA",       # Policy/tech
+        "KXPRESMENTION",                             # Presidential mentions
+        "KXHOUSERACE", "KXSENRACE",                 # Race markets (not sports)
+        "KXPOWER", "KXBITCOIN",                     # Energy/crypto variants
+    )
+
+    SPORTS_PREFIXES = (
+        "KXNCAAMB", "KXNCAAFB", "KXNCAAWB",
+        "KXUCLGAME", "KXWTAMATCH", "KXATPMATCH", "KXWTACHALLENGER",
+        "KXNHLWEST", "KXNHLEAST", "KXNBA", "KXNFL", "KXMLB", "KXMLS",
+        "KXNCAAMBSPREAD", "KXNCAAMBTOTAL", "KXNCAAMBGAME",
+        "KXNHLGAME", "KXNBAGAME", "KXNFLGAME",
+    )
+
     large_fills = []
     try:
-        # Global trades endpoint — returns the most recent fills across all markets
-        data   = client._get("/markets/trades", params={"limit": 100})
+        data   = client._get("/markets/trades", params={"limit": 200})
         trades = data.get("trades", [])
     except Exception as e:
         logger.error(f"[WHALE] Market fetch failed: {e}")
         return []
 
+    sports_skipped = 0
     for t in trades:
         count = int(t.get("count", 0))
         if count < WHALE_MIN_CONTRACTS:
             continue
 
-        ticker = t.get("ticker", "")
+        ticker    = t.get("ticker", "")
+        member_id = t.get("taker_member_id", "")
+        is_tracked = member_id in TRACKED_WHALE_MEMBERS
+
+        # Always skip KXMVE parlays
         if ticker.startswith("KXMVE") or ticker.startswith("KXMVECROSS"):
+            sports_skipped += 1
             continue
-        price  = int(t.get("yes_price", t.get("no_price", 50)))
-        side   = t.get("taker_side", "yes")
+
+        # Skip sports unless it's a tracked whale
+        if ticker.startswith(SPORTS_PREFIXES) and not is_tracked:
+            sports_skipped += 1
+            continue
+
+        # For untracked members, only follow known high-edge categories
+        if not is_tracked and not ticker.startswith(HIGH_EDGE_PREFIXES):
+            sports_skipped += 1
+            continue
+
+        price = int(t.get("yes_price", t.get("no_price", 50)))
+        side  = t.get("taker_side", "yes")
 
         large_fills.append({
             "ticker":      ticker,
-            "title":       t.get("ticker", "")[:80],
+            "title":       ticker[:80],
             "side":        side,
             "action":      "buy",
             "price_cents": price,
             "count":       count,
             "cost_usd":    _cost_usd(count, price),
-            "member_id":   t.get("taker_member_id", ""),
+            "member_id":   member_id,
             "created_at":  t.get("created_time", ""),
-            "is_tracked":  t.get("taker_member_id", "") in TRACKED_WHALE_MEMBERS,
+            "is_tracked":  is_tracked,
         })
 
     large_fills.sort(key=lambda x: x["cost_usd"], reverse=True)
@@ -83,7 +122,7 @@ def fetch_large_fills(client) -> List[Dict]:
             seen[t] = f
     large_fills = sorted(seen.values(), key=lambda x: x["cost_usd"], reverse=True)
 
-    logger.info(f"[WHALE] {len(large_fills)} large fill(s) found")
+    logger.info(f"[WHALE] {len(large_fills)} quality fills ({sports_skipped} sports/low-edge skipped)")
     return large_fills
 
 

@@ -29,15 +29,33 @@ CATEGORY_SCORES = {
     "election":    0.90,
     "president":   0.85,
     "congress":    0.80,
-    "fed":         0.75,   # FOMC rate decisions — experts have edge
-    "cpi":         0.78,   # Inflation data — economists have edge
+    "fed":         0.78,   # FOMC rate decisions
+    "cpi":         0.80,   # Inflation data — economists have edge
+    "inflation":   0.75,
+    "gdp":         0.72,
+    "unemployment":0.70,
+    "payroll":     0.72,
     "employment":  0.72,
-    "bitcoin":     0.68,
+    "bitcoin":     0.75,
+    "btc":         0.75,
     "crypto":      0.65,
-    "supreme":     0.80,   # Supreme Court — lawyers have edge
-    "arrest":      0.95,   # Geopolitical discontinuity
+    "ethereum":    0.68,
+    "xrp":         0.65,
+    "supreme":     0.80,
+    "arrest":      0.95,
     "resign":      0.78,
     "impeach":     0.82,
+    "tariff":      0.75,
+    "sanction":    0.70,
+    "trump":       0.80,
+    "executive":   0.72,
+    "senate":      0.75,
+    "house":       0.70,
+    "s&p":         0.68,
+    "nasdaq":      0.68,
+    "gold":        0.65,
+    "oil":         0.65,
+    "rate":        0.72,
 }
 
 
@@ -85,7 +103,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
     open_markets = [m for m in open_markets
                     if not m.get("ticker", "").startswith(SPORTS_PREFIXES)]
     # Pass 1: filter by category score using cheap list data (title/tags available)
-    cat_filtered = [m for m in open_markets if _category_score(m) >= 0.50]
+    cat_filtered = [m for m in open_markets if _category_score(m) >= 0.35]
     logger.info(f"[LONGSHOT] {len(cat_filtered)} markets pass category filter")
 
     for m in cat_filtered:
