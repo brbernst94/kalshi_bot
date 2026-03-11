@@ -196,26 +196,80 @@ class KalshiClient:
     # ── Markets ───────────────────────────────────────────────────────────────
 
     def get_markets(self, limit: int = 200, cursor: Optional[str] = None,
-                    status: str = "open") -> Dict:
+                    status: str = "open", series_ticker: Optional[str] = None) -> Dict:
         params = {"limit": limit, "status": status}
         if cursor:
             params["cursor"] = cursor
+        if series_ticker:
+            params["series_ticker"] = series_ticker
         return self._get("/markets", params=params)
 
-    def get_all_open_markets(self, max_pages: int = 30) -> List[Dict]:
+    def get_series_list(self) -> List[Dict]:
+        """Return all active Kalshi series."""
+        try:
+            resp = self._get("/series")
+            return resp.get("series", [])
+        except Exception as e:
+            logger.debug(f"[CLIENT] /series failed: {e}")
+            return []
+
+    def get_all_open_markets(self, max_pages_per_series: int = 5) -> List[Dict]:
         """
-        Paginate all open Kalshi markets and strip KXMVE sports parlays.
-        Strategies handle price filtering themselves via orderbook/market lookups.
+        Fetch open markets using Kalshi's /series endpoint to avoid the KXMVE flood.
+        Falls back to raw pagination (skipping KXMVE) if /series is unavailable.
         """
-        markets, cursor = [], None
-        for _ in range(max_pages):
+        series_list = self.get_series_list()
+
+        if series_list:
+            # Filter out KXMVE (sports parlays) series
+            good_series = [
+                s for s in series_list
+                if not s.get("ticker", "").startswith("KXMVE")
+                and s.get("status", "active") in ("active", "open", "")
+            ]
+            logger.info(f"[CLIENT] {len(series_list)} total series, {len(good_series)} non-KXMVE")
+
+            markets_by_ticker: dict = {}
+            for series in good_series:
+                sticker = series.get("ticker", "")
+                cursor  = None
+                for _ in range(max_pages_per_series):
+                    try:
+                        resp  = self.get_markets(limit=200, cursor=cursor, series_ticker=sticker)
+                        batch = resp.get("markets", [])
+                        if not batch:
+                            break
+                        for m in batch:
+                            markets_by_ticker[m["ticker"]] = m
+                        cursor = resp.get("cursor")
+                        if not cursor:
+                            break
+                        time.sleep(0.05)
+                    except Exception as e:
+                        logger.debug(f"[CLIENT] Series '{sticker}' fetch error: {e}")
+                        break
+
+            result = [m for m in markets_by_ticker.values() if m.get("status") == "open"]
+            logger.info(f"[CLIENT] get_all_open_markets → {len(result)} open markets via series")
+            return result
+
+        # Fallback: raw pagination, log first ticker on each page for diagnosis
+        logger.warning("[CLIENT] /series unavailable — falling back to raw pagination (slow)")
+        markets, cursor, page = [], None, 0
+        kxmve_count = 0
+        for page in range(100):
             try:
                 resp  = self.get_markets(limit=200, cursor=cursor)
                 batch = resp.get("markets", [])
                 if not batch:
                     break
-                # Skip KXMVE (sports cross-category parlays — always illiquid)
-                markets.extend(m for m in batch if not m.get("ticker", "").startswith("KXMVE"))
+                first_ticker = batch[0].get("ticker", "") if batch else ""
+                kxmve_page   = sum(1 for m in batch if m.get("ticker", "").startswith("KXMVE"))
+                kxmve_count += kxmve_page
+                non_kxmve    = [m for m in batch if not m.get("ticker", "").startswith("KXMVE")]
+                if page % 10 == 0:
+                    logger.info(f"[CLIENT] Page {page}: first={first_ticker[:40]} kxmve={kxmve_page}/200")
+                markets.extend(non_kxmve)
                 cursor = resp.get("cursor")
                 if not cursor:
                     break
@@ -223,7 +277,7 @@ class KalshiClient:
             except Exception as e:
                 logger.error(f"[CLIENT] Market page fetch failed: {e}")
                 break
-        logger.debug(f"[CLIENT] get_all_open_markets → {len(markets)} markets (KXMVE excluded)")
+        logger.info(f"[CLIENT] Fallback pagination: {len(markets)} non-KXMVE markets, {kxmve_count} KXMVE skipped over {page+1} pages")
         return markets
 
     def get_market(self, ticker: str) -> Dict:
