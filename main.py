@@ -44,6 +44,23 @@ risk_manager = None
 DRY_RUN      = False
 cycle        = 0
 
+# Shared market cache — fetched once per minute, shared across all strategies
+_market_cache      = []
+_market_cache_time = 0
+
+def get_cached_markets():
+    global _market_cache, _market_cache_time
+    import time
+    now = time.time()
+    if now - _market_cache_time > 55:   # refresh every 55 seconds
+        try:
+            _market_cache      = client.get_all_open_markets()
+            _market_cache_time = now
+            logger.info(f"[CACHE] Refreshed {len(_market_cache)} markets")
+        except Exception as e:
+            logger.error(f"[CACHE] Market fetch failed: {e}")
+    return _market_cache
+
 
 def run_whale():
     logger.info("━━━ WHALE CYCLE ━━━")
@@ -52,17 +69,20 @@ def run_whale():
 
 def run_fade():
     logger.info("━━━ FADE CYCLE ━━━")
-    c = fade_strat.scan(client, risk_manager)
+    markets = get_cached_markets()
+    c = fade_strat.scan(client, risk_manager, markets)
     if not DRY_RUN: fade_strat.execute(client, risk_manager, c)
 
 def run_bond():
     logger.info("━━━ BOND CYCLE ━━━")
-    c = bond_strat.scan(client, risk_manager)
+    markets = get_cached_markets()
+    c = bond_strat.scan(client, risk_manager, markets)
     if not DRY_RUN: bond_strat.execute(client, risk_manager, c)
 
 def run_longshot():
     logger.info("━━━ LONGSHOT CYCLE ━━━")
-    c = longshot_strat.scan(client, risk_manager)
+    markets = get_cached_markets()
+    c = longshot_strat.scan(client, risk_manager, markets)
     if not DRY_RUN: longshot_strat.execute(client, risk_manager, c)
 
 def run_monitor():

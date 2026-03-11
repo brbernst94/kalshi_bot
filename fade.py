@@ -52,7 +52,7 @@ def detect_spike(history: List[Dict]) -> Optional[Dict]:
     }
 
 
-def scan(client, risk_manager) -> List[Dict]:
+def scan(client, risk_manager, markets=None) -> List[Dict]:
     logger.info("[FADE] Scanning for Kalshi overcorrections...")
     candidates = []
 

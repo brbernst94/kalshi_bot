@@ -68,15 +68,16 @@ def _price_momentum(history: List[Dict]) -> float:
     return min(max(change, 0) * 3, 1.0)
 
 
-def scan(client, risk_manager) -> List[Dict]:
+def scan(client, risk_manager, markets=None) -> List[Dict]:
     logger.info("[LONGSHOT] Scanning Kalshi for asymmetric opportunities...")
     candidates = []
 
-    try:
-        markets = client.get_all_open_markets()
-    except Exception as e:
-        logger.error(f"[LONGSHOT] Market fetch failed: {e}")
-        return []
+    if markets is None:
+        try:
+            markets = client.get_all_open_markets()
+        except Exception as e:
+            logger.error(f"Market fetch failed: {e}")
+            return []
 
     for m in markets:
         if m.get("status") != "open":

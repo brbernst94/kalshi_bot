@@ -56,15 +56,26 @@ def get_yes_price(market: Dict) -> Optional[int]:
     return None
 
 
-def scan(client, risk_manager) -> List[Dict]:
+def scan(client, risk_manager, markets=None) -> List[Dict]:
     logger.info("[BOND] Scanning Kalshi for near-certain markets...")
     candidates = []
 
-    try:
-        markets = client.get_all_open_markets()
-    except Exception as e:
-        logger.error(f"[BOND] Market fetch failed: {e}")
-        return []
+    if markets is None:
+        try:
+            markets = client.get_all_open_markets()
+        except Exception as e:
+            logger.error(f"Market fetch failed: {e}")
+            return []
+
+    # Diagnostic: log the fields from the first market so we can verify structure
+    if markets:
+        sample = markets[0]
+        logger.info(f"[BOND] Sample market fields: {list(sample.keys())}")
+        logger.info(f"[BOND] Sample prices: yes_bid={sample.get('yes_bid')} yes_ask={sample.get('yes_ask')} last_price={sample.get('last_price')} yes_price={sample.get('yes_price')}")
+        logger.info(f"[BOND] Sample close fields: close_time={sample.get('close_time')} expiration_time={sample.get('expiration_time')} end_date={sample.get('end_date')}")
+
+    open_count = sum(1 for m in markets if m.get("status") == "open")
+    logger.info(f"[BOND] {len(markets)} total markets, {open_count} open")
 
     for m in markets:
         if m.get("status") != "open":
