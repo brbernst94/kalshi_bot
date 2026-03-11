@@ -67,43 +67,57 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             logger.error(f"Market fetch failed: {e}")
             return []
 
-    # Diagnostic: log the first market to verify we have real liquid markets
-    if markets:
-        sample = markets[0]
-        logger.info(f"[BOND] Sample ticker: {sample.get('ticker', 'N/A')}")
-        logger.info(f"[BOND] Sample prices: yes_bid={sample.get('yes_bid')} yes_ask={sample.get('yes_ask')} last_price={sample.get('last_price')}")
-        logger.info(f"[BOND] Sample close: close_time={sample.get('close_time')} expiration_time={sample.get('expiration_time')}")
+    open_markets = [m for m in markets if m.get("status") == "open"]
+    logger.info(f"[BOND] {len(markets)} total markets, {len(open_markets)} open")
 
-    open_count = sum(1 for m in markets if m.get("status") == "open")
-    logger.info(f"[BOND] {len(markets)} total markets, {open_count} open")
-
-    for m in markets:
-        if m.get("status") != "open":
-            continue
-
+    # Pass 1: filter by close time using cheap list data
+    time_filtered = []
+    for m in open_markets:
         days = days_to_close(m)
-        if days is None or days > BOND_MAX_DAYS or days < 0.3:
+        if days is not None and 0.3 <= days <= BOND_MAX_DAYS:
+            time_filtered.append(m)
+
+    logger.info(f"[BOND] {len(time_filtered)} markets within {BOND_MAX_DAYS}-day window")
+
+    if not time_filtered:
+        logger.info("[BOND] 0 candidates")
+        return []
+
+    # Pass 2: fetch individual market details for price data
+    # List endpoint doesn't populate yes_bid/yes_ask — need per-market fetch
+    import time as _time
+    for m in time_filtered:
+        ticker = m.get("ticker", "")
+        try:
+            detail = client.get_market(ticker)
+            market_data = detail.get("market", detail)  # API wraps in "market" key
+        except Exception as e:
+            logger.debug(f"[BOND] Detail fetch failed {ticker}: {e}")
             continue
 
-        yes_price_cents = get_yes_price(m)
-        if yes_price_cents is None:
+        days = days_to_close(market_data) or days_to_close(m)
+        if days is None:
+            continue
+
+        yes_price_cents = get_yes_price(market_data)
+        if yes_price_cents is None or yes_price_cents == 0:
             continue
         if yes_price_cents < BOND_MIN_PRICE_CENTS or yes_price_cents >= 99:
             continue
 
-        open_int = int(m.get("open_interest", 0) or 0)
+        open_int = int(market_data.get("open_interest", m.get("open_interest", 0)) or 0)
         if open_int < 100:
             continue
 
-        gross_return   = (100 - yes_price_cents) / yes_price_cents
-        net_return     = gross_return - KALSHI_TAKER_FEE_PCT
+        gross_return = (100 - yes_price_cents) / yes_price_cents
+        net_return   = gross_return - KALSHI_TAKER_FEE_PCT
         if net_return < 0.02:
             continue
-        annualised     = ((1 + net_return) ** (365 / max(days, 1))) - 1
+        annualised = ((1 + net_return) ** (365 / max(days, 1))) - 1
 
         candidates.append({
-            "ticker":        m["ticker"],
-            "title":         m.get("title", "")[:80],
+            "ticker":        ticker,
+            "title":         market_data.get("title", m.get("title", ""))[:80],
             "yes_price":     yes_price_cents,
             "gross_return":  gross_return,
             "net_return":    net_return,
@@ -111,6 +125,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             "days":          days,
             "open_interest": open_int,
         })
+        _time.sleep(0.05)  # gentle rate limiting
 
     candidates.sort(key=lambda x: x["net_return"], reverse=True)
     logger.info(f"[BOND] {len(candidates)} candidates")

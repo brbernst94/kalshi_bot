@@ -56,17 +56,16 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
     logger.info("[FADE] Scanning for Kalshi overcorrections...")
     candidates = []
 
-    try:
-        markets = client.get_all_open_markets()
-    except Exception as e:
-        logger.error(f"[FADE] Failed: {e}")
-        return []
+    if markets is None:
+        try:
+            markets = client.get_all_open_markets()
+        except Exception as e:
+            logger.error(f"[FADE] Failed: {e}")
+            return []
 
-    for m in markets:
-        if m.get("status") != "open":
-            continue
-        if int(m.get("open_interest", 0) or 0) < 200:
-            continue
+    open_markets = [m for m in markets if m.get("status") == "open"]
+
+    for m in open_markets:
 
         ticker = m.get("ticker")
         if not ticker:

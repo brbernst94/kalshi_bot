@@ -79,54 +79,81 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             logger.error(f"Market fetch failed: {e}")
             return []
 
-    for m in markets:
-        if m.get("status") != "open":
+    open_markets = [m for m in markets if m.get("status") == "open"]
+
+    # Pass 1: filter by category score using cheap list data (title/tags available)
+    cat_filtered = [m for m in open_markets if _category_score(m) >= 0.50]
+    logger.info(f"[LONGSHOT] {len(cat_filtered)} markets pass category filter")
+
+    import time as _time
+    for m in cat_filtered:
+        ticker = m.get("ticker", "")
+
+        # Fetch individual market for price data
+        try:
+            detail   = client.get_market(ticker)
+            md       = detail.get("market", detail)
+        except Exception as e:
+            logger.debug(f"[LONGSHOT] Detail fetch failed {ticker}: {e}")
             continue
 
-        yes_ask = m.get("yes_ask")
-        if yes_ask is None:
+        yes_ask = None
+        for field in ("yes_ask", "yes_bid", "last_price"):
+            v = md.get(field)
+            if v is not None:
+                try:
+                    yes_ask = int(v)
+                    if yes_ask > 0:
+                        break
+                except Exception:
+                    continue
+
+        if yes_ask is None or yes_ask == 0:
+            _time.sleep(0.05)
             continue
-        yes_ask = int(yes_ask)
         if not (LONGSHOT_MIN_PRICE_CENTS <= yes_ask <= LONGSHOT_MAX_PRICE_CENTS):
+            _time.sleep(0.05)
             continue
 
-        open_int = int(m.get("open_interest", 0) or 0)
+        open_int = int(md.get("open_interest", m.get("open_interest", 0)) or 0)
         if open_int < LONGSHOT_MIN_OPEN_INT:
+            _time.sleep(0.05)
             continue
 
-        days    = days_to_close(m)
+        days = days_to_close(md) or days_to_close(m)
         if days and days < 1:
+            _time.sleep(0.05)
             continue
 
-        cat_score = _category_score(m)
-        if cat_score < 0.50:
-            continue
+        cat_score = _category_score(md)
 
         try:
-            history  = client.get_market_history(m["ticker"])
+            history  = client.get_market_history(ticker)
             momentum = _price_momentum(history)
         except Exception:
             momentum = 0.0
 
-        cat_premium  = (cat_score - 0.5) * 0.3
-        our_prob     = min((yes_ask / 100) * (1 + cat_premium) + momentum * 0.05, 0.40)
-        payout_mult  = 100 / yes_ask
-        ev           = our_prob * payout_mult - 1.0 - KALSHI_TAKER_FEE_PCT
+        cat_premium = (cat_score - 0.5) * 0.3
+        our_prob    = min((yes_ask / 100) * (1 + cat_premium) + momentum * 0.05, 0.40)
+        payout_mult = 100 / yes_ask
+        ev          = our_prob * payout_mult - 1.0 - KALSHI_TAKER_FEE_PCT
 
         if ev < 0.10:
+            _time.sleep(0.05)
             continue
 
         candidates.append({
-            "ticker":       m["ticker"],
-            "title":        m.get("title", "")[:80],
-            "yes_price":    yes_ask,
-            "payout_mult":  round(payout_mult, 1),
-            "our_prob":     round(our_prob, 3),
-            "ev":           round(ev, 3),
-            "cat_score":    cat_score,
-            "momentum":     momentum,
+            "ticker":        ticker,
+            "title":         md.get("title", m.get("title", ""))[:80],
+            "yes_price":     yes_ask,
+            "payout_mult":   round(payout_mult, 1),
+            "our_prob":      round(our_prob, 3),
+            "ev":            round(ev, 3),
+            "cat_score":     cat_score,
+            "momentum":      momentum,
             "open_interest": open_int,
         })
+        _time.sleep(0.05)
 
     candidates.sort(key=lambda x: x["ev"] * x["cat_score"], reverse=True)
     logger.info(f"[LONGSHOT] {len(candidates)} candidates")
