@@ -36,6 +36,39 @@ from config import BASE_URL, KALSHI_API_KEY_ID, KALSHI_PRIVATE_KEY
 logger = logging.getLogger(__name__)
 
 
+def price_cents(d: dict, field: str) -> Optional[int]:
+    """
+    Read a price field from a Kalshi market dict, handling both formats:
+      - New (March 2026+):  field_dollars = "0.8500"  → returns 85
+      - Legacy (pre-March 2026): field = 85 (integer cents) → returns 85
+
+    Usage:
+        yes_ask = price_cents(market, "yes_ask")   # tries yes_ask_dollars first
+        last_px = price_cents(market, "last_price") # tries last_price_dollars first
+    """
+    # Try new _dollars field first (Kalshi fixed-point migration, live March 12 2026)
+    v = d.get(f"{field}_dollars")
+    if v is not None:
+        try:
+            c = int(round(float(v) * 100))
+            if 1 <= c <= 99:
+                return c
+        except (TypeError, ValueError):
+            pass
+
+    # Fall back to legacy integer cents field
+    v = d.get(field)
+    if v is not None:
+        try:
+            c = int(round(float(v)))
+            if 1 <= c <= 99:
+                return c
+        except (TypeError, ValueError):
+            pass
+
+    return None
+
+
 def _load_private_key():
     """
     Load RSA private key — robust against Railway env var formatting.
@@ -178,21 +211,33 @@ class KalshiClient:
     def get_balance(self) -> float:
         """Returns total portfolio value: cash + value of open positions."""
         data = self._get("/portfolio/balance")
+        # balance field is in cents (integer) — not affected by fixed-point migration
         cash = round(data.get("balance", 0) / 100, 2)
 
-        # Add current value of open positions from the portfolio endpoint
         try:
             pos_data = self._get("/portfolio/positions")
             positions = pos_data.get("market_positions", [])
             position_value = 0.0
             for p in positions:
-                # Kalshi returns `value` in cents — the current market value
+                # Try _dollars field first (March 2026 migration), then integer cents
+                v_dollars = p.get("value_dollars") or p.get("market_value_dollars")
+                if v_dollars is not None:
+                    try:
+                        position_value += abs(float(v_dollars))
+                        continue
+                    except (TypeError, ValueError):
+                        pass
                 v = p.get("value") or p.get("market_value") or 0
                 position_value += abs(int(v)) / 100
         except Exception:
             position_value = 0.0
 
         return round(cash + position_value, 2)
+
+    def get_cash(self) -> float:
+        """Returns spendable cash only (excludes value locked in positions)."""
+        data = self._get("/portfolio/balance")
+        return round(data.get("balance", 0) / 100, 2)
 
     def get_positions(self) -> List[Dict]:
         data = self._get("/portfolio/positions")
@@ -358,18 +403,29 @@ class KalshiClient:
         """
         Returns (best_bid_cents, best_ask_cents) for YES side.
         Returns (None, None) if no liquidity.
-        Kalshi orderbook format: {"orderbook": {"yes": [[price, qty], ...], "no": [[price, qty], ...]}}
-        YES ask = 100 - best NO bid (complementary)
+        Handles both legacy integer cents and new _dollars string format (March 2026).
         """
         raw = self.get_orderbook(ticker, depth=5)
-        book = raw.get("orderbook", raw)   # unwrap "orderbook" key
+        book = raw.get("orderbook", raw)
+        yes_bids = book.get("yes", [])
+        no_bids  = book.get("no",  [])
 
-        yes_bids = book.get("yes", [])  # [[price, qty], ...] sorted best-first
-        no_bids  = book.get("no",  [])  # [[price, qty], ...] sorted best-first
+        def _level_cents(level):
+            p = level[0] if isinstance(level, (list, tuple)) else level
+            if isinstance(p, str):
+                try:
+                    return int(round(float(p) * 100))
+                except ValueError:
+                    return None
+            try:
+                v = int(p)
+                return v if 1 <= v <= 99 else None
+            except (TypeError, ValueError):
+                return None
 
-        best_bid = int(yes_bids[0][0]) if yes_bids else None
-        best_ask = (100 - int(no_bids[0][0])) if no_bids else None
-
+        best_bid = _level_cents(yes_bids[0]) if yes_bids else None
+        no_best  = _level_cents(no_bids[0])  if no_bids  else None
+        best_ask = (100 - no_best) if no_best is not None else None
         return best_bid, best_ask
 
     def get_mid_price_cents(self, ticker: str) -> Optional[int]:
@@ -399,19 +455,25 @@ class KalshiClient:
         count: number of contracts
         """
         price_cents = max(1, min(99, int(price_cents)))
+        price_dollars_str = f"{price_cents / 100:.4f}"
+        count_int = max(1, int(count))
         body = {
             "ticker":           ticker,
             "side":             side.lower(),
             "action":           action.lower(),
             "type":             "limit",
-            "count":            int(count),
+            # Send both count formats (Kalshi fixed-point migration March 2026)
+            "count":            count_int,
+            "count_fp":         f"{count_int:.2f}",
             "client_order_id":  str(uuid.uuid4())[:16],
             "post_only":        post_only,
         }
         if side.lower() == "yes":
-            body["yes_price"] = price_cents
+            body["yes_price"]         = price_cents        # legacy
+            body["yes_price_dollars"] = price_dollars_str  # new
         else:
-            body["no_price"]  = price_cents
+            body["no_price"]          = price_cents        # legacy
+            body["no_price_dollars"]  = price_dollars_str  # new
 
         result = self._post("/portfolio/orders", body)
         order  = result.get("order", result)

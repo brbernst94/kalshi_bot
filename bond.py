@@ -24,6 +24,7 @@ from config import (
     BOND_MAX_DAYS, BOND_MAX_POSITION_PCT, BOND_MIN_PRICE_CENTS,
     KALSHI_TAKER_FEE_PCT, STRATEGY_ALLOCATION,
 )
+from client import price_cents as _pc
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +90,9 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         days = days_to_close(m)
         if days is not None and not (0.1 <= days <= BOND_MAX_DAYS):
             continue
-        # Must have a last_price already in cache — avoids illiquid ghost markets
-        lp = m.get("last_price") or m.get("yes_ask") or m.get("yes_bid")
+        # Must have a tradeable price — skip ghost markets with no price data
+        # price_cents() handles both _dollars strings (new) and integer cents (old)
+        lp = _pc(m, "yes_ask") or _pc(m, "last_price") or _pc(m, "yes_bid")
         if not lp:
             continue
         time_filtered.append(m)
@@ -110,18 +112,11 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         if days is None:
             days = 30
 
-        # Prefer yes_ask, fall back to last_price
-        yes_price_cents = None
-        for field in ("yes_ask", "last_price", "yes_bid", "yes_price"):
-            v = m.get(field)
-            if v is not None:
-                try:
-                    c = int(round(float(v)))
-                    if 1 <= c <= 99:
-                        yes_price_cents = c
-                        break
-                except (TypeError, ValueError):
-                    continue
+        # Use price_cents helper — handles _dollars strings (new) and integer cents (old)
+        yes_price_cents = (
+            _pc(m, "yes_ask") or _pc(m, "last_price") or
+            _pc(m, "yes_bid") or _pc(m, "yes_price")
+        )
 
         if yes_price_cents is None:
             continue

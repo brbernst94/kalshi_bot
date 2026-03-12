@@ -26,6 +26,7 @@ from config import (
     LONGSHOT_MAX_POS_PCT, STRATEGY_ALLOCATION,
 )
 from bond import days_to_close
+from client import price_cents as _pc
 
 logger = logging.getLogger(__name__)
 
@@ -78,18 +79,8 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
     for m in bias_filtered:
         ticker = m.get("ticker", "")
 
-        # Use last_price already in cache — orderbook is empty for illiquid cheap markets
-        yes_ask = None
-        for field in ("yes_ask", "last_price", "yes_bid"):
-            v = m.get(field)
-            if v is not None:
-                try:
-                    c = int(round(float(v)))
-                    if c > 0:
-                        yes_ask = c
-                        break
-                except (TypeError, ValueError):
-                    continue
+        # Use price_cents helper — handles _dollars strings (new) and integer cents (old)
+        yes_ask = _pc(m, "yes_ask") or _pc(m, "last_price") or _pc(m, "yes_bid")
 
         if yes_ask is None or yes_ask == 0:
             continue

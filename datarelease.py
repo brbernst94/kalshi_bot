@@ -33,6 +33,7 @@ from typing import Dict, List, Optional
 
 from config import STRATEGY_ALLOCATION, STARTING_BANKROLL_USD
 from bond import days_to_close
+from client import price_cents as _pc
 
 logger = logging.getLogger(__name__)
 
@@ -87,17 +88,8 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         if not (MIN_HOURS_BEFORE <= hours <= MAX_HOURS_BEFORE):
             continue
 
-        # Get current market price
-        yes_price = None
-        for field in ("yes_ask", "yes_bid", "last_price"):
-            v = md.get(field)
-            if v is not None:
-                try:
-                    yes_price = int(v)
-                    if yes_price > 0:
-                        break
-                except Exception:
-                    continue
+        # Get current market price (handles _dollars strings and integer cents)
+        yes_price = _pc(md, "yes_ask") or _pc(md, "last_price") or _pc(md, "yes_bid")
 
         if yes_price is None or yes_price == 0:
             continue
@@ -120,18 +112,9 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         # Strategy: if market is at 70¢ and we believe it's 75¢ (based on
         # recent macro data), the 5¢ edge after release is pure profit.
 
-        # For now, use a simple momentum edge: if price moved >3¢ in last
-        # few hours toward YES, momentum favors continuation
-        try:
-            history  = client.get_market_history(ticker)
-            prices   = [int(h.get("yes_price", 50)) for h in (history or [])
-                        if h.get("yes_price")]
-            if len(prices) >= 3:
-                recent_move = prices[-1] - prices[0] if prices else 0
-            else:
-                recent_move = 0
-        except Exception:
-            recent_move = 0
+        # Estimate momentum from previous_yes_ask vs current — no API call needed
+        prev_yes = _pc(m, "previous_yes_ask") or _pc(m, "previous_price")
+        recent_move = (yes_price - prev_yes) if prev_yes else 0
 
         # Only trade if there's directional conviction
         if abs(recent_move) < 3 and 40 <= yes_price <= 60:
