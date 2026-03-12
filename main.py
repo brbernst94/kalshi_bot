@@ -28,14 +28,11 @@ from monitor   import check_positions
 from dashboard import print_dashboard, monthly_summary
 from analyst   import run_daily_analysis
 import whale as whale_strat
-import longshot as longshot_strat
-import fade as fade_strat
-import bond as bond_strat
+import momentum as momentum_strat
 import datarelease as datarelease_strat
 import arb as arb_strat
 from config import (
-    WHALE_SCAN_MINS, FADE_SCAN_MINS,
-    BOND_SCAN_MINS, LONGSHOT_SCAN_MINS, MONITOR_SCAN_MINS, ARB_SCAN_MINS
+    WHALE_SCAN_MINS, MOMENTUM_SCAN_MINS, MONITOR_SCAN_MINS, ARB_SCAN_MINS, DATARELEASE_SCAN_MINS
 )
 
 setup_logging()
@@ -75,23 +72,11 @@ def run_arb():
     opps = arb_strat.scan(client, risk_manager, markets)
     if not DRY_RUN: arb_strat.execute(client, risk_manager, opps)
 
-def run_fade():
-    logger.info("━━━ FADE CYCLE ━━━")
+def run_momentum():
+    logger.info("━━━ MOMENTUM CYCLE ━━━")
     markets = get_cached_markets()
-    c = fade_strat.scan(client, risk_manager, markets)
-    if not DRY_RUN: fade_strat.execute(client, risk_manager, c)
-
-def run_bond():
-    logger.info("━━━ BOND CYCLE ━━━")
-    markets = get_cached_markets()
-    c = bond_strat.scan(client, risk_manager, markets)
-    if not DRY_RUN: bond_strat.execute(client, risk_manager, c)
-
-def run_longshot():
-    logger.info("━━━ LONGSHOT CYCLE ━━━")
-    markets = get_cached_markets()
-    c = longshot_strat.scan(client, risk_manager, markets)
-    if not DRY_RUN: longshot_strat.execute(client, risk_manager, c)
+    c = momentum_strat.scan(client, risk_manager, markets)
+    if not DRY_RUN: momentum_strat.execute(client, risk_manager, c)
 
 def run_datarelease():
     logger.info("━━━ DATA RELEASE CYCLE ━━━")
@@ -177,10 +162,8 @@ def main():
     # ── Schedules ─────────────────────────────────────────────────────────────
     schedule.every(WHALE_SCAN_MINS).minutes.do(run_whale)
     schedule.every(ARB_SCAN_MINS).minutes.do(run_arb)
-    schedule.every(FADE_SCAN_MINS).minutes.do(run_fade)
-    schedule.every(BOND_SCAN_MINS).minutes.do(run_bond)
-    schedule.every(LONGSHOT_SCAN_MINS).minutes.do(run_longshot)
-    schedule.every(5).minutes.do(run_datarelease)
+    schedule.every(MOMENTUM_SCAN_MINS).minutes.do(run_momentum)
+    schedule.every(DATARELEASE_SCAN_MINS).minutes.do(run_datarelease)
     schedule.every(MONITOR_SCAN_MINS).minutes.do(run_monitor)
 
     # Daily analysis at 00:15 UTC — after midnight reset, before first trades
@@ -191,10 +174,8 @@ def main():
     logger.info("Running initial scan on startup...")
     run_whale()
     run_arb()
-    run_bond()
-    run_longshot()
+    run_momentum()
     run_datarelease()
-    run_fade()
     run_monitor()
 
     logger.info("⏱  Main loop active. Daily analysis scheduled for 00:15 UTC.")

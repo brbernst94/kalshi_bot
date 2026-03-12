@@ -81,21 +81,18 @@ FADE_MAX_POS_PCT         = 0.22
 
 # ── Strategy Allocation ───────────────────────────────────────────────────────
 STRATEGY_ALLOCATION = {
-    "whale":       0.25,   # Whale copy — working, non-sports only
-    "bond":        0.20,   # Near-certainty favorites — research: 90-99¢ wins > priced
-    "arb":         0.20,   # Intra-Kalshi arb — risk-free when YES+NO < $1.00
-    "datarelease": 0.15,   # CPI/Fed/NFP pre-release — highest edge per Fed research
-    "fade":        0.12,   # Overcorrection fades
-    "longshot":    0.08,   # Fade overpriced YES longshots (buy NO, maker order)
+    "whale":       0.28,   # Whale copy — working, proven real returns
+    "momentum":    0.32,   # Trend-following on top-60 high-volume markets (replaces bond/fade/longshot)
+    "arb":         0.15,   # Intra-Kalshi arb — risk-free when YES+NO < $1.00
+    "datarelease": 0.25,   # CPI/Fed/NFP pre-release — highest edge per Fed research
 }
 
 # ── Scheduling ────────────────────────────────────────────────────────────────
-WHALE_SCAN_MINS    = 3
-FADE_SCAN_MINS     = 3
-BOND_SCAN_MINS     = 3
-LONGSHOT_SCAN_MINS = 3
-MONITOR_SCAN_MINS  = 3
-ARB_SCAN_MINS      = 2    # Arb opportunities close fast — scan every 2 min
+WHALE_SCAN_MINS      = 3
+MOMENTUM_SCAN_MINS   = 3   # Trend following — same cadence as market cache refresh
+MONITOR_SCAN_MINS    = 3
+ARB_SCAN_MINS        = 2   # Arb opportunities close fast — scan every 2 min
+DATARELEASE_SCAN_MINS = 5
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_LEVEL      = "DEBUG"
