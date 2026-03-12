@@ -29,6 +29,7 @@ import logging
 import time
 from typing import Dict, List, Optional, Tuple
 
+from client import price_cents as _pc
 from config import (
     MAX_OPEN_POSITIONS,
     MAX_SINGLE_POSITION_PCT,
