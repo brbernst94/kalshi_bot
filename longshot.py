@@ -76,6 +76,10 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         random.shuffle(bias_filtered)
         bias_filtered = bias_filtered[:40]
 
+    no_price_count = 0
+    out_of_range = 0
+    bad_days = 0
+
     for m in bias_filtered:
         ticker = m.get("ticker", "")
 
@@ -83,12 +87,15 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         yes_ask = _pc(m, "yes_ask") or _pc(m, "last_price") or _pc(m, "yes_bid")
 
         if yes_ask is None or yes_ask == 0:
+            no_price_count += 1
             continue
         if not (LONGSHOT_MIN_PRICE_CENTS <= yes_ask <= LONGSHOT_MAX_PRICE_CENTS):
+            out_of_range += 1
             continue
 
         days = days_to_close(m)
         if days is None or days < 0.5 or days > 60:
+            bad_days += 1
             continue
 
         fade_score   = _fade_score(m)
@@ -110,6 +117,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             "days":      days,
         })
 
+    logger.info(f"[LONGSHOT] Filter breakdown: {no_price_count} no-price, {out_of_range} out-of-range (not 2-20¢), {bad_days} bad-days")
     candidates.sort(key=lambda x: x["ev"] * x["fade_score"], reverse=True)
     logger.info(f"[LONGSHOT] {len(candidates)} fade candidates")
     for c in candidates[:5]:

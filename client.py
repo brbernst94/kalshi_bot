@@ -455,25 +455,20 @@ class KalshiClient:
         count: number of contracts
         """
         price_cents = max(1, min(99, int(price_cents)))
-        price_dollars_str = f"{price_cents / 100:.4f}"
         count_int = max(1, int(count))
         body = {
             "ticker":           ticker,
             "side":             side.lower(),
             "action":           action.lower(),
             "type":             "limit",
-            # Send both count formats (Kalshi fixed-point migration March 2026)
-            "count":            count_int,
-            "count_fp":         f"{count_int:.2f}",
+            "count":            count_int,   # integer cents still accepted (write migration TBD)
             "client_order_id":  str(uuid.uuid4())[:16],
             "post_only":        post_only,
         }
         if side.lower() == "yes":
-            body["yes_price"]         = price_cents        # legacy
-            body["yes_price_dollars"] = price_dollars_str  # new
+            body["yes_price"] = price_cents
         else:
-            body["no_price"]          = price_cents        # legacy
-            body["no_price_dollars"]  = price_dollars_str  # new
+            body["no_price"]  = price_cents
 
         result = self._post("/portfolio/orders", body)
         order  = result.get("order", result)

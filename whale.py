@@ -14,6 +14,7 @@ wallets/members worth following.
 """
 
 import logging
+from client import price_cents as _pc
 import time
 from datetime import datetime, timezone
 from typing import Dict, List, Optional
@@ -82,7 +83,12 @@ def fetch_large_fills(client) -> List[Dict]:
     effective_min = max(20, WHALE_MIN_CONTRACTS // 2) if is_off_peak else WHALE_MIN_CONTRACTS
 
     for t in trades:
-        count = int(t.get("count", 0))
+        # Handle fractional count migration (count_fp is string like "31.00")
+        count_raw = t.get("count_fp") or t.get("count", 0)
+        try:
+            count = int(float(count_raw))
+        except (TypeError, ValueError):
+            count = 0
         if count < effective_min:
             continue
 
@@ -103,7 +109,7 @@ def fetch_large_fills(client) -> List[Dict]:
         # Accept everything else — don't over-restrict to allowlist
         # (financial, crypto, political, policy markets all have edge)
 
-        price = int(t.get("yes_price", t.get("no_price", 50)))
+        price = _pc(t, "yes_price") or _pc(t, "no_price") or 50
         side  = t.get("taker_side", "yes")
 
         large_fills.append({

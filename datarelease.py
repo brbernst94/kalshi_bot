@@ -43,8 +43,8 @@ DATA_RELEASE_PREFIXES = (
     "KXGDP", "KXUNRATE", "KXPCE", "KXFOMC",
 )
 
-# Maximum hours before release to enter a position
-MAX_HOURS_BEFORE = 48
+# Maximum hours before release to enter a position (7 days — covers Fed meeting week)
+MAX_HOURS_BEFORE = 168
 # Minimum hours before release (avoid entering <2h out — too risky)
 MIN_HOURS_BEFORE = 2
 # Minimum price gap vs consensus to trade
@@ -82,10 +82,12 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
 
         days = days_to_close(md) or days_to_close(m)
         if days is None:
+            logger.debug(f"[DATARELEASE] SKIP {ticker} | no close time")
             continue
 
         hours = days * 24
         if not (MIN_HOURS_BEFORE <= hours <= MAX_HOURS_BEFORE):
+            logger.debug(f"[DATARELEASE] SKIP {ticker} | {hours:.1f}h to release (window {MIN_HOURS_BEFORE}-{MAX_HOURS_BEFORE}h)")
             continue
 
         # Get current market price (handles _dollars strings and integer cents)

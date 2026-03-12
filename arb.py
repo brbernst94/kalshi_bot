@@ -44,25 +44,13 @@ ARB_MAX_POSITION_PCT    = 0.15  # Up to 15% of balance per arb leg
 ARB_MAX_TRADES_PER_CYCLE = 3    # Don't over-deploy in one cycle
 ARB_MIN_CONTRACTS       = 5     # Minimum contracts to bother
 
-# Fields Kalshi uses for best available prices
-_YES_ASK_FIELDS = ("yes_ask", "best_yes_ask_price", "best_ask")
-_NO_ASK_FIELDS  = ("no_ask",  "best_no_ask_price")
-_YES_BID_FIELDS = ("yes_bid", "best_yes_bid_price", "best_bid")
-_NO_BID_FIELDS  = ("no_bid",  "best_no_bid_price")
+def _yes_ask(m: Dict) -> Optional[int]:
+    """YES ask price in cents — handles _dollars strings and integer cents."""
+    return _pc(m, "yes_ask") or _pc(m, "best_yes_ask_price") or _pc(m, "best_ask")
 
-
-def _get_price(market: Dict, fields: tuple) -> Optional[int]:
-    """Extract price in cents from a market object, trying multiple field names."""
-    for f in fields:
-        v = market.get(f)
-        if v is not None:
-            try:
-                cents = int(round(float(v)))
-                if 1 <= cents <= 99:
-                    return cents
-            except (TypeError, ValueError):
-                continue
-    return None
+def _no_ask(m: Dict) -> Optional[int]:
+    """NO ask price in cents — handles _dollars strings and integer cents."""
+    return _pc(m, "no_ask") or _pc(m, "best_no_ask_price")
 
 
 def _taker_fee_cents(price_cents: int) -> float:
@@ -104,8 +92,8 @@ def scan(client, risk_manager, markets: List[Dict]) -> List[Dict]:
         if m.get("market_type") not in (None, "binary", "yes_no", ""):
             continue
 
-        yes_ask = _get_price(m, _YES_ASK_FIELDS)
-        no_ask  = _get_price(m, _NO_ASK_FIELDS)
+        yes_ask = _yes_ask(m)
+        no_ask  = _no_ask(m)
 
         if yes_ask is None or no_ask is None:
             continue
