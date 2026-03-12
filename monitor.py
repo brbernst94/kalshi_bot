@@ -129,6 +129,16 @@ def check_positions(client, risk_manager) -> int:
         elif mid <= RESOLUTION_NO:
             reason = f"RESOLVED_NO {mid}¢"
 
+        # 1b. Near-certain — free up capital rather than sit on <$0.50 upside
+        # YES position at ≥97¢: max remaining gain is 3¢, not worth the hold
+        # NO position tracked under _NO key — entry_cents is NO price, mid is NO price
+        if not reason:
+            is_no_leg = ticker.endswith("_NO") or pos.get("side") == "no"
+            winning_price = mid if not is_no_leg else (100 - mid)
+            if winning_price >= 97:
+                remaining_upside_cents = 100 - winning_price
+                reason = f"NEAR_CERTAIN {winning_price}¢ (${remaining_upside_cents*count/100:.2f} left on table — redeploying)"
+
         # 2. Take profit
         take = TAKE_PROFIT_CENTS.get(strategy)
         if not reason and take and move >= take:
