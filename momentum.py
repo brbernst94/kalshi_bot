@@ -51,15 +51,40 @@ MOMENTUM_PRIORITY_PREFIXES = (
     "KXDOGE",                                          # DOGE budget cuts — high volume
 )
 
-# Always skip these — moves are game-state, not tradeable momentum
+# Always skip these — moves are game-state noise, not tradeable momentum.
+# Rule: if you can't model the outcome independently, skip it.
+# Data showed: tennis -$48, intl soccer -$61, NHL -$7 on a single day.
+# Also skip KXBTCD (daily BTC price contracts): data shows daily contracts
+# lose $1.19/trade on avg; KXBTC15M (15-min) makes +$0.63/trade — keep those.
 MOMENTUM_SKIP_PREFIXES = (
-    "KXNCAAMB", "KXNCAAFB", "KXNCAAWB",
+    # ── US sports ────────────────────────────────────────────────────────────
+    "KXNCAAMB", "KXNCAAFB", "KXNCAAWB",       # NCAA (all variants)
     "KXNBA", "KXNBAGAME", "KXNFL", "KXNFLGAME",
-    "KXMLB", "KXMLS", "KXNHL", "KXNHLGAME",
-    "KXWBC", "KXWBO", "KXWBA", "KXIBF", "KXUFC",
-    "KXPGA", "KXATPMATCH", "KXWTAMATCH",
-    "KXUCLGAME", "KXCONCACAF",
+    "KXMLB", "KXMLS",
+    "KXNHL",                                    # catches KXNHLGAME, KXNHLTOTAL, etc.
     "KXNBA2KCOVER", "KXMLBNL",
+    # ── Tennis (all variants) ─────────────────────────────────────────────────
+    "KXATP",                                    # catches KXATPMATCH, KXATPCHALLENGERMATCH,
+                                                #   KXATPGSPREAD, KXATPGAMETOTAL, etc.
+    "KXWTA",                                    # catches KXWTAMATCH, KXWTACHALLENGER, etc.
+    "KXITN",
+    # ── International soccer ─────────────────────────────────────────────────
+    "KXUCL",                                    # catches KXUCLGAME, KXUCLSPREAD, KXUCLTOTAL
+    "KXCONCACAF",
+    "KXBRASILEIRO",                             # Brasileirao
+    "KXARGPREMDIV",                             # Argentine Primera Division
+    "KXEUROLEAGUE",                             # EuroLeague basketball
+    "KXFIBACHAMP",                              # FIBA Champions League
+    "KXBUNDES", "KXSERIEA", "KXLALIGA", "KXLIGUE",  # European soccer leagues
+    "KXEPL", "KXUEFA",
+    # ── Other sports ─────────────────────────────────────────────────────────
+    "KXWBC", "KXWBO", "KXWBA", "KXIBF",        # Boxing / Baseball Classic
+    "KXUFC", "KXPGA",
+    "KXKBL", "KXAFC", "KXJBL", "KXCBA",        # Asian/intl leagues (36% win rate)
+    "KXKBO", "KXNPB",
+    # ── Crypto daily contracts (15-min contracts NOT skipped — they work) ────
+    "KXBTCD",                                   # Daily BTC price: -$1.19/trade avg
+    "KXETHD", "KXSOLD", "KXXRPD",              # Other daily crypto contracts
 )
 
 # ── In-memory state ───────────────────────────────────────────────────────────

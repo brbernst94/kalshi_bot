@@ -57,11 +57,24 @@ def fetch_large_fills(client) -> List[Dict]:
     )
 
     SPORTS_PREFIXES = (
+        # US sports
         "KXNCAAMB", "KXNCAAFB", "KXNCAAWB",
-        "KXUCLGAME", "KXWTAMATCH", "KXATPMATCH", "KXWTACHALLENGER",
-        "KXNHLWEST", "KXNHLEAST", "KXNBA", "KXNFL", "KXMLB", "KXMLS",
-        "KXNCAAMBSPREAD", "KXNCAAMBTOTAL", "KXNCAAMBGAME",
-        "KXNHLGAME", "KXNBAGAME", "KXNFLGAME",
+        "KXNBA", "KXNBAGAME", "KXNFL", "KXNFLGAME",
+        "KXMLB", "KXMLS",
+        "KXNHL",                                # catches KXNHLGAME/TOTAL/WEST/EAST
+        "KXNBA2KCOVER", "KXMLBNL",
+        # Tennis — all variants
+        "KXATP",                                # KXATPMATCH, KXATPCHALLENGERMATCH, KXATPGSPREAD, etc.
+        "KXWTA", "KXITN",
+        # International soccer / basketball
+        "KXUCL",                                # KXUCLGAME, KXUCLSPREAD, KXUCLTOTAL
+        "KXCONCACAF",
+        "KXBRASILEIRO", "KXARGPREMDIV",
+        "KXEUROLEAGUE", "KXFIBACHAMP",
+        "KXBUNDES", "KXSERIEA", "KXLALIGA", "KXLIGUE", "KXEPL", "KXUEFA",
+        # Other sports
+        "KXWBC", "KXWBO", "KXWBA", "KXIBF", "KXUFC", "KXPGA",
+        "KXKBL", "KXAFC", "KXJBL", "KXCBA", "KXKBO", "KXNPB",
     )
 
     large_fills = []
