@@ -212,9 +212,9 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
     strat_budget = balance * STRATEGY_ALLOCATION["whale"]
 
     for c in candidates[:2]:
-        # Conservative sizing: hard cap at $8/trade (5% of $150 balance)
-        # Prevents correlated sports losses from wiping account
-        max_per_trade = min(balance * 0.05, 8.0)
+        # Size at 7% of live balance per trade — scales automatically as balance grows
+        # No hard dollar cap; balance is fetched live so this self-adjusts
+        max_per_trade = balance * 0.07
         copy_count = max(1, int(max_per_trade * 100 / max(c["price_cents"], 1)))
         cost       = client.cost_usd(copy_count, c["price_cents"])
 
