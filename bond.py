@@ -112,23 +112,34 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
 
         yes_price_cents = get_yes_price(market_data)
         if yes_price_cents is None or yes_price_cents == 0:
+            logger.info(f"[BOND] SKIP {ticker} | days={days:.1f} | price=None/0")
             continue
 
         # Two tiers based on research:
         # Tier 1 (BEST): 90-98¢ — near-certainty, wins 98% of time per research
         # Tier 2: BOND_MIN_PRICE_CENTS–90¢ — solid favorites
         if yes_price_cents < BOND_MIN_PRICE_CENTS or yes_price_cents >= 99:
+            logger.info(
+                f"[BOND] SKIP {ticker} | days={days:.1f} | "
+                f"YES={yes_price_cents}¢ (outside {BOND_MIN_PRICE_CENTS}-98¢ range)"
+            )
             continue
 
         MAKER_FEE = 0.0
         gross_return = (100 - yes_price_cents) / yes_price_cents
         net_return   = gross_return - MAKER_FEE
         if net_return < 0.005:  # lowered from 0.01 — even 0.5% return is fine for high-certainty
+            logger.info(f"[BOND] SKIP {ticker} | net_return={net_return:.4f} < 0.005")
             continue
 
         annualised = ((1 + net_return) ** (365 / max(days, 1))) - 1
         tier = 1 if yes_price_cents >= 90 else 2
 
+        logger.info(
+            f"[BOND] CANDIDATE {ticker} | YES={yes_price_cents}¢ | "
+            f"days={days:.1f} | net_return={net_return:.1%} | "
+            f"annualised={annualised:.0%} | tier={tier}"
+        )
         candidates.append({
             "ticker":        ticker,
             "title":         market_data.get("title", m.get("title", ""))[:80],

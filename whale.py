@@ -72,9 +72,18 @@ def fetch_large_fills(client) -> List[Dict]:
         return []
 
     sports_skipped = 0
+
+    # During off-peak hours (4-7pm ET, overnight), lower the bar to catch
+    # whatever signal exists rather than returning 0
+    from datetime import datetime, timezone
+    hour_utc = datetime.now(timezone.utc).hour
+    # 21:00-23:59 UTC = 4-7pm ET (off-peak), 0-11 UTC = overnight/pre-market
+    is_off_peak = hour_utc >= 21 or hour_utc <= 11
+    effective_min = max(20, WHALE_MIN_CONTRACTS // 2) if is_off_peak else WHALE_MIN_CONTRACTS
+
     for t in trades:
         count = int(t.get("count", 0))
-        if count < WHALE_MIN_CONTRACTS:
+        if count < effective_min:
             continue
 
         ticker    = t.get("ticker", "")

@@ -32,9 +32,10 @@ import longshot as longshot_strat
 import fade as fade_strat
 import bond as bond_strat
 import datarelease as datarelease_strat
+import arb as arb_strat
 from config import (
     WHALE_SCAN_MINS, FADE_SCAN_MINS,
-    BOND_SCAN_MINS, LONGSHOT_SCAN_MINS, MONITOR_SCAN_MINS
+    BOND_SCAN_MINS, LONGSHOT_SCAN_MINS, MONITOR_SCAN_MINS, ARB_SCAN_MINS
 )
 
 setup_logging()
@@ -67,6 +68,12 @@ def run_whale():
     logger.info("━━━ WHALE CYCLE ━━━")
     c = whale_strat.scan(client, risk_manager)
     if not DRY_RUN: whale_strat.execute(client, risk_manager, c)
+
+def run_arb():
+    logger.info("━━━ ARB CYCLE ━━━")
+    markets = get_cached_markets()
+    opps = arb_strat.scan(client, risk_manager, markets)
+    if not DRY_RUN: arb_strat.execute(client, risk_manager, opps)
 
 def run_fade():
     logger.info("━━━ FADE CYCLE ━━━")
@@ -169,6 +176,7 @@ def main():
 
     # ── Schedules ─────────────────────────────────────────────────────────────
     schedule.every(WHALE_SCAN_MINS).minutes.do(run_whale)
+    schedule.every(ARB_SCAN_MINS).minutes.do(run_arb)
     schedule.every(FADE_SCAN_MINS).minutes.do(run_fade)
     schedule.every(BOND_SCAN_MINS).minutes.do(run_bond)
     schedule.every(LONGSHOT_SCAN_MINS).minutes.do(run_longshot)
@@ -182,6 +190,7 @@ def main():
 
     logger.info("Running initial scan on startup...")
     run_whale()
+    run_arb()
     run_bond()
     run_longshot()
     run_datarelease()
