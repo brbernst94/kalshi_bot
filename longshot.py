@@ -77,29 +77,19 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
 
     for m in bias_filtered:
         ticker = m.get("ticker", "")
-        try:
-            bid, ask = client.get_best_bid_ask(ticker)
-        except Exception as e:
-            logger.debug(f"[LONGSHOT] Orderbook fetch failed {ticker}: {e}")
-            continue
 
-        yes_ask = ask  # real-time ask from orderbook
-        if yes_ask is None:
-            # Fallback to market detail if no live ask
-            try:
-                detail = client.get_market(ticker)
-                md = detail.get("market", detail)
-                for field in ("yes_ask", "last_price", "yes_bid"):
-                    v = md.get(field)
-                    if v is not None:
-                        try:
-                            yes_ask = int(v)
-                            if yes_ask > 0:
-                                break
-                        except Exception:
-                            continue
-            except Exception:
-                pass
+        # Use last_price already in cache — orderbook is empty for illiquid cheap markets
+        yes_ask = None
+        for field in ("yes_ask", "last_price", "yes_bid"):
+            v = m.get(field)
+            if v is not None:
+                try:
+                    c = int(round(float(v)))
+                    if c > 0:
+                        yes_ask = c
+                        break
+                except (TypeError, ValueError):
+                    continue
 
         if yes_ask is None or yes_ask == 0:
             continue

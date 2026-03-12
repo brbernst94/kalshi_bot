@@ -71,73 +71,68 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
     # Pre-filter: skip sports — bond strategy targets policy/financial/economic markets
     SPORTS_PREFIXES = (
         "KXNCAAMB", "KXNCAAFB", "KXNCAAWB", "KXUCLGAME",
-        "KXWTAMATCH", "KXATPMATCH", "KXWTACHALLENGER",
+        "KXWTAMATCH", "KXATPMATCH", "KXWTACHALLENGER", "KXATPCHALLENGER",
         "KXNHLWEST", "KXNHLEAST", "KXNHLGAME",
         "KXNBA", "KXNBAGAME", "KXNFL", "KXNFLGAME",
         "KXMLB", "KXMLS", "KXNCAAMBSPREAD", "KXNCAAMBTOTAL", "KXNCAAMBGAME",
+        "KXWBC", "KXWBO", "KXWBA", "KXIBF",   # Boxing titles — illiquid ghost markets
+        "KXUFC", "KXPGA", "KXCONCACAF", "KXUCLSPREAD",
     )
     open_markets = [m for m in open_markets
                     if not m.get("ticker", "").startswith(SPORTS_PREFIXES)]
     logger.info(f"[BOND] {len(markets)} total markets, {len(open_markets)} open after sports filter")
 
-    # Pass 1: filter by close time — include markets with missing close_time (assume eligible)
+    # Pass 1: filter by close time AND require a last_price in the cache
+    # (markets with no last_price have never traded — skip them, no liquidity)
     time_filtered = []
     for m in open_markets:
         days = days_to_close(m)
-        if days is None or (0.1 <= days <= BOND_MAX_DAYS):
-            time_filtered.append(m)
+        if days is not None and not (0.1 <= days <= BOND_MAX_DAYS):
+            continue
+        # Must have a last_price already in cache — avoids illiquid ghost markets
+        lp = m.get("last_price") or m.get("yes_ask") or m.get("yes_bid")
+        if not lp:
+            continue
+        time_filtered.append(m)
 
-    logger.info(f"[BOND] {len(time_filtered)} markets within {BOND_MAX_DAYS}-day window")
+    logger.info(f"[BOND] {len(time_filtered)} markets within {BOND_MAX_DAYS}-day window with price data")
 
     if not time_filtered:
         logger.info("[BOND] 0 candidates")
         return []
 
-    # Pass 2: fetch orderbook for accurate prices (yes_ask field is null when no resting orders)
-    # Research finding: 90-99¢ contracts win MORE than priced → best edge tier
-    # Using maker (limit) orders = 0% fee vs 1.4% taker fee at 80¢
+    # Pass 2: use last_price from cache — no individual API calls needed
+    # For illiquid markets the orderbook is always empty; last_price is the real signal
     for m in time_filtered:
         ticker = m.get("ticker", "")
-        try:
-            bid, ask = client.get_best_bid_ask(ticker)
-        except Exception as e:
-            logger.debug(f"[BOND] Orderbook fetch failed {ticker}: {e}")
-            continue
-
-        # Use ask price (what we'd pay to buy YES)
-        yes_price_cents = ask
-        if yes_price_cents is None:
-            # Fallback: try market detail
-            try:
-                detail = client.get_market(ticker)
-                market_data = detail.get("market", detail)
-                yes_price_cents = get_yes_price(market_data)
-            except Exception:
-                pass
-
-        if yes_price_cents is None or yes_price_cents == 0:
-            logger.info(f"[BOND] SKIP {ticker} | no price available (no resting orders)")
-            continue
 
         days = days_to_close(m)
         if days is None:
-            days = 30  # conservative default
+            days = 30
 
-        # Two tiers based on research:
-        # Tier 1 (BEST): 90-98¢ — near-certainty, wins 98% of time per research
-        # Tier 2: BOND_MIN_PRICE_CENTS–90¢ — solid favorites
+        # Prefer yes_ask, fall back to last_price
+        yes_price_cents = None
+        for field in ("yes_ask", "last_price", "yes_bid", "yes_price"):
+            v = m.get(field)
+            if v is not None:
+                try:
+                    c = int(round(float(v)))
+                    if 1 <= c <= 99:
+                        yes_price_cents = c
+                        break
+                except (TypeError, ValueError):
+                    continue
+
+        if yes_price_cents is None:
+            continue
+
         if yes_price_cents < BOND_MIN_PRICE_CENTS or yes_price_cents >= 99:
-            logger.info(
-                f"[BOND] SKIP {ticker} | days={days:.1f} | "
-                f"YES={yes_price_cents}¢ (outside {BOND_MIN_PRICE_CENTS}-98¢ range)"
-            )
             continue
 
         MAKER_FEE = 0.0
         gross_return = (100 - yes_price_cents) / yes_price_cents
         net_return   = gross_return - MAKER_FEE
         if net_return < 0.005:
-            logger.info(f"[BOND] SKIP {ticker} | net_return={net_return:.4f} < 0.005")
             continue
 
         annualised = ((1 + net_return) ** (365 / max(days, 1))) - 1
@@ -145,8 +140,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
 
         logger.info(
             f"[BOND] CANDIDATE {ticker} | YES={yes_price_cents}¢ | "
-            f"days={days:.1f} | net_return={net_return:.1%} | "
-            f"annualised={annualised:.0%} | tier={tier}"
+            f"days={days:.1f} | net_return={net_return:.1%} | tier={tier}"
         )
         candidates.append({
             "ticker":        ticker,
