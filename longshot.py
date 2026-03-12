@@ -78,33 +78,39 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
     for m in bias_filtered:
         ticker = m.get("ticker", "")
         try:
-            detail = client.get_market(ticker)
-            md     = detail.get("market", detail)
+            bid, ask = client.get_best_bid_ask(ticker)
         except Exception as e:
-            logger.debug(f"[LONGSHOT] Detail fetch failed {ticker}: {e}")
+            logger.debug(f"[LONGSHOT] Orderbook fetch failed {ticker}: {e}")
             continue
 
-        yes_ask = None
-        for field in ("yes_ask", "last_price", "yes_bid"):
-            v = md.get(field)
-            if v is not None:
-                try:
-                    yes_ask = int(v)
-                    if yes_ask > 0:
-                        break
-                except Exception:
-                    continue
+        yes_ask = ask  # real-time ask from orderbook
+        if yes_ask is None:
+            # Fallback to market detail if no live ask
+            try:
+                detail = client.get_market(ticker)
+                md = detail.get("market", detail)
+                for field in ("yes_ask", "last_price", "yes_bid"):
+                    v = md.get(field)
+                    if v is not None:
+                        try:
+                            yes_ask = int(v)
+                            if yes_ask > 0:
+                                break
+                        except Exception:
+                            continue
+            except Exception:
+                pass
 
         if yes_ask is None or yes_ask == 0:
             continue
         if not (LONGSHOT_MIN_PRICE_CENTS <= yes_ask <= LONGSHOT_MAX_PRICE_CENTS):
             continue
 
-        days = days_to_close(md) or days_to_close(m)
+        days = days_to_close(m)
         if days is None or days < 0.5 or days > 60:
             continue
 
-        fade_score   = _fade_score(md)
+        fade_score   = _fade_score(m)
         no_price     = 100 - yes_ask
         true_yes_prob = (yes_ask / 100) * 0.65  # 35% discount for longshot bias
         our_edge      = (1 - true_yes_prob) - (no_price / 100)
@@ -115,7 +121,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
 
         candidates.append({
             "ticker":    ticker,
-            "title":     md.get("title", m.get("title", ""))[:80],
+            "title":     m.get("title", "")[:80],
             "yes_price": yes_ask,
             "no_price":  no_price,
             "fade_score": fade_score,

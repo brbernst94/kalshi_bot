@@ -63,7 +63,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             logger.error(f"[FADE] Failed: {e}")
             return []
 
-    open_markets = [m for m in markets if m.get("status") == "open"]
+    open_markets = list(markets)  # cache is already open markets, no status field in list responses
 
     for m in open_markets:
 

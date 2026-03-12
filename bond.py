@@ -93,27 +93,35 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         logger.info("[BOND] 0 candidates")
         return []
 
-    # Pass 2: fetch individual market details for price data
+    # Pass 2: fetch orderbook for accurate prices (yes_ask field is null when no resting orders)
     # Research finding: 90-99¢ contracts win MORE than priced → best edge tier
-    # 80-90¢ contracts are roughly fair with small positive edge as maker
     # Using maker (limit) orders = 0% fee vs 1.4% taker fee at 80¢
     for m in time_filtered:
         ticker = m.get("ticker", "")
         try:
-            detail = client.get_market(ticker)
-            market_data = detail.get("market", detail)
+            bid, ask = client.get_best_bid_ask(ticker)
         except Exception as e:
-            logger.debug(f"[BOND] Detail fetch failed {ticker}: {e}")
+            logger.debug(f"[BOND] Orderbook fetch failed {ticker}: {e}")
             continue
 
-        days = days_to_close(market_data) or days_to_close(m)
-        if days is None:
-            days = 7
+        # Use ask price (what we'd pay to buy YES)
+        yes_price_cents = ask
+        if yes_price_cents is None:
+            # Fallback: try market detail
+            try:
+                detail = client.get_market(ticker)
+                market_data = detail.get("market", detail)
+                yes_price_cents = get_yes_price(market_data)
+            except Exception:
+                pass
 
-        yes_price_cents = get_yes_price(market_data)
         if yes_price_cents is None or yes_price_cents == 0:
-            logger.info(f"[BOND] SKIP {ticker} | days={days:.1f} | price=None/0")
+            logger.info(f"[BOND] SKIP {ticker} | no price available (no resting orders)")
             continue
+
+        days = days_to_close(m)
+        if days is None:
+            days = 30  # conservative default
 
         # Two tiers based on research:
         # Tier 1 (BEST): 90-98¢ — near-certainty, wins 98% of time per research
@@ -128,7 +136,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         MAKER_FEE = 0.0
         gross_return = (100 - yes_price_cents) / yes_price_cents
         net_return   = gross_return - MAKER_FEE
-        if net_return < 0.005:  # lowered from 0.01 — even 0.5% return is fine for high-certainty
+        if net_return < 0.005:
             logger.info(f"[BOND] SKIP {ticker} | net_return={net_return:.4f} < 0.005")
             continue
 
@@ -142,7 +150,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         )
         candidates.append({
             "ticker":        ticker,
-            "title":         market_data.get("title", m.get("title", ""))[:80],
+            "title":         m.get("title", "")[:80],
             "yes_price":     yes_price_cents,
             "gross_return":  gross_return,
             "net_return":    net_return,
