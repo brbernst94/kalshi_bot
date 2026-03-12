@@ -82,7 +82,14 @@ class RiskManager:
                 for p in api_positions
                 if int(p.get("net_position", p.get("position", 0)) or 0) != 0
             }
-            stale = [t for t in list(self.open_positions) if t not in api_tickers]
+            now = datetime.now(timezone.utc)
+            stale = [
+                t for t in list(self.open_positions)
+                if t not in api_tickers
+                # Grace period: don't prune positions placed in last 10 min
+                # (order may still be settling in Kalshi's API)
+                and (now - self.open_positions[t].get("opened_at", now)).total_seconds() > 600
+            ]
             for t in stale:
                 logger.info(f"[RISK] Pruning stale position {t} (not in API)")
                 self.open_positions.pop(t, None)

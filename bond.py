@@ -120,11 +120,10 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         if yes_price_cents < BOND_MIN_PRICE_CENTS or yes_price_cents >= 99:
             continue
 
-        # Use maker fee (0%) not taker fee — we always post limit orders
         MAKER_FEE = 0.0
         gross_return = (100 - yes_price_cents) / yes_price_cents
-        net_return   = gross_return - MAKER_FEE  # 0 fee as maker!
-        if net_return < 0.01:
+        net_return   = gross_return - MAKER_FEE
+        if net_return < 0.005:  # lowered from 0.01 — even 0.5% return is fine for high-certainty
             continue
 
         annualised = ((1 + net_return) ** (365 / max(days, 1))) - 1

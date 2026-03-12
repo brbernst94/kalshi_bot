@@ -110,7 +110,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         our_edge      = (1 - true_yes_prob) - (no_price / 100)
         ev = our_edge
 
-        if ev < 0.05:
+        if ev < 0.02:
             continue
 
         candidates.append({

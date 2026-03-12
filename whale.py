@@ -211,7 +211,7 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
 
     strat_budget = balance * STRATEGY_ALLOCATION["whale"]
 
-    for c in candidates[:2]:
+    for c in candidates[:4]:
         # Size at 7% of live balance per trade — scales automatically as balance grows
         # No hard dollar cap; balance is fetched live so this self-adjusts
         max_per_trade = balance * 0.07

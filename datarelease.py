@@ -137,15 +137,22 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         if abs(recent_move) < 3 and 40 <= yes_price <= 60:
             continue
 
-        # Determine trade direction based on momentum
-        if recent_move > 3 and yes_price < 90:
+        # Trade direction: high-probability side OR momentum-driven
+        if yes_price >= 70:
+            # High favorite — buy YES as maker, collect when it resolves
             side      = "yes"
             our_price = yes_price
-            ev        = 0.06  # conservative estimate
-        elif yes_price >= 75:
+            ev        = (100 - yes_price) / yes_price * 0.65
+        elif yes_price <= 30 and recent_move < -3:
+            # Price falling fast — buy NO (fade the drop continuation)
+            side      = "no"
+            our_price = 100 - yes_price
+            ev        = 0.06
+        elif recent_move > 5 and yes_price < 85:
+            # Strong upward momentum before release
             side      = "yes"
             our_price = yes_price
-            ev        = (100 - yes_price) / yes_price * 0.6
+            ev        = 0.07
         else:
             continue
 
