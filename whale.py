@@ -75,6 +75,14 @@ def fetch_large_fills(client) -> List[Dict]:
         # Other sports
         "KXWBC", "KXWBO", "KXWBA", "KXIBF", "KXUFC", "KXPGA",
         "KXKBL", "KXAFC", "KXJBL", "KXCBA", "KXKBO", "KXNPB",
+        # Esports — high volume but random outcomes, no exploitable edge
+        "KXCS2",                                # CS2/Counter-Strike (seen in logs)
+        "KXLOL", "KXVALO", "KXRL", "KXDOTA", "KXESPORT",
+        # Other football / misc leagues seen bleeding through
+        "KXEFL",                                # EFL Championship (seen in logs)
+        "KXCFL", "KXAFL", "KXSERIEB",
+        "KXLIVTOUR",                            # LIV Golf
+        "KXIWMEN",                              # Weightlifting / similar misc sport
     )
 
     large_fills = []

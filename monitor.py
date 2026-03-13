@@ -273,7 +273,8 @@ def cleanup_long_dated_positions(client, risk_manager) -> int:
 
         # ── Get market close date ──────────────────────────────────────────
         try:
-            market_data = client.get_market(ticker)
+            raw = client.get_market(ticker)
+            market_data = raw.get("market", raw)   # API wraps in {"market": {...}}
         except Exception as e:
             logger.debug(f"[CLEANUP] Couldn't fetch market data for {ticker}: {e}")
             skipped_no_date += 1
@@ -293,6 +294,7 @@ def cleanup_long_dated_positions(client, risk_manager) -> int:
             continue
 
         # ── This position is too long-dated — exit it ──────────────────────
+        logger.info(f"[CLEANUP] FLAGGED {ticker} | {side.upper()} x{qty} | resolves in {days:.0f}d (>{MAX_POSITION_DAYS}d limit) — selling")
         try:
             mid = client.get_mid_price_cents(ticker)
         except Exception:

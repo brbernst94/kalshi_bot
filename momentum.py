@@ -82,6 +82,10 @@ MOMENTUM_SKIP_PREFIXES = (
     "KXUFC", "KXPGA",
     "KXKBL", "KXAFC", "KXJBL", "KXCBA",        # Asian/intl leagues (36% win rate)
     "KXKBO", "KXNPB",
+    # Esports
+    "KXCS2", "KXLOL", "KXVALO", "KXRL", "KXDOTA", "KXESPORT",
+    # Other leagues / misc
+    "KXEFL", "KXCFL", "KXAFL", "KXSERIEB", "KXLIVTOUR", "KXIWMEN",
     # ── Crypto daily contracts (15-min contracts NOT skipped — they work) ────
     "KXBTCD",                                   # Daily BTC price: -$1.19/trade avg
     "KXETHD", "KXSOLD", "KXXRPD",              # Other daily crypto contracts
