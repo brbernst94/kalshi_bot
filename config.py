@@ -46,11 +46,17 @@ MAX_OPEN_POSITIONS       = 20      # Allow up to 20 simultaneous positions
 # Minimum NET edge after fees (need more than 1% just to break even)
 MIN_NET_EDGE             = 0.02   # 3.5% net edge minimum
 
+# ── Global time horizon cap ────────────────────────────────────────────────────
+# No strategy may open a position in a market resolving more than 30 days out.
+# Monitor's cleanup sweep will also exit any existing portfolio positions
+# (including manually placed ones) beyond this horizon automatically.
+MAX_POSITION_DAYS = 30
+
 # ── Strategy-specific ─────────────────────────────────────────────────────────
 
 # Bond: near-certain YES contracts
 BOND_MIN_PRICE_CENTS  = 55         # Buy YES ≥ 55¢ (lowered to find more candidates)
-BOND_MAX_DAYS         = 365        # Resolve within 365 days (was 90 — too few markets)
+BOND_MAX_DAYS         = 30         # Capped at global MAX_POSITION_DAYS
 BOND_MAX_POSITION_PCT = 0.25
 
 # Whale following

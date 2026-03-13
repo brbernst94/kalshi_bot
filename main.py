@@ -24,7 +24,7 @@ import schedule
 from logger    import setup_logging
 from client    import KalshiClient
 from risk      import RiskManager
-from monitor   import check_positions
+from monitor   import check_positions, cleanup_long_dated_positions
 from dashboard import print_dashboard, monthly_summary
 from analyst   import run_daily_analysis
 import whale as whale_strat
@@ -89,6 +89,16 @@ def run_monitor():
     cycle += 1
     check_positions(client, risk_manager)
     print_dashboard(risk_manager, cycle)
+
+def run_cleanup():
+    """Exit all portfolio positions resolving beyond MAX_POSITION_DAYS (30 days).
+    Catches manually placed long-term bets and anything that slipped past entry filters.
+    Runs once at startup then every 4 hours."""
+    if DRY_RUN:
+        logger.info("[CLEANUP] DRY-RUN — skipping long-dated position sweep")
+        return
+    logger.info("━━━ LONG-DATED CLEANUP ━━━")
+    cleanup_long_dated_positions(client, risk_manager)
 
 def run_analysis():
     """Daily analyst — scores strategies and rebalances config if needed."""
@@ -165,6 +175,8 @@ def main():
     schedule.every(MOMENTUM_SCAN_MINS).minutes.do(run_momentum)
     schedule.every(DATARELEASE_SCAN_MINS).minutes.do(run_datarelease)
     schedule.every(MONITOR_SCAN_MINS).minutes.do(run_monitor)
+    # Sweep long-dated positions every 4 hours — catches manual bets and drift
+    schedule.every(4).hours.do(run_cleanup)
 
     # Daily analysis at 00:15 UTC — after midnight reset, before first trades
     schedule.every().day.at("00:15").do(run_analysis)
@@ -172,6 +184,8 @@ def main():
     schedule.every().day.at("23:55").do(monthly_summary)
 
     logger.info("Running initial scan on startup...")
+    # Cleanup first — free up capital before strategies try to deploy it
+    run_cleanup()
     run_whale()
     run_arb()
     run_momentum()

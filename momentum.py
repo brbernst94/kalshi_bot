@@ -37,7 +37,7 @@ MOMENTUM_MIN_MOVE_CENTS = 5      # Minimum price move between cycles to trigger
 MOMENTUM_MIN_VOLUME     = 2000   # Minimum 24h contracts — ensures real liquidity
 MOMENTUM_TOP_N          = 60     # Only scan top N markets by volume each cycle
 MOMENTUM_MIN_DAYS       = 2      # Skip markets resolving in < 2 days (too volatile)
-MOMENTUM_MAX_DAYS       = 90     # Skip very long-dated markets (slow momentum)
+MOMENTUM_MAX_DAYS       = 30     # Capped at global MAX_POSITION_DAYS — no long-dated bets
 MOMENTUM_MAX_POS_PCT    = 0.07   # Max 7% of balance per trade
 
 # Markets where price moves reflect REAL information (not game-state noise)
