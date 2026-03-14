@@ -234,19 +234,36 @@ def check_positions(client, risk_manager) -> int:
     return closed
 
 
-def cleanup_long_dated_positions(client, risk_manager) -> int:
+def cleanup_long_dated_positions(client, risk_manager,
+                                  markets: Optional[List[Dict]] = None) -> int:
     """
     Sweep ALL portfolio positions and exit any resolving beyond MAX_POSITION_DAYS.
 
-    Uses close_time already present on the /portfolio/positions response —
-    zero extra API calls per position. Falls back to one GET /markets/{ticker}
-    only when close_time is absent from the position object.
+    Root cause of previous failures: Kalshi's /portfolio/positions API returns
+    a close_time field that represents the *trading-window* close (often today),
+    NOT the settlement/resolution date. Reading it made every position look
+    short-dated, so cleanup always exited 0.
 
-    Catches manually-placed long-term bets that entry filters can't block.
-    Runs once at startup, then every 4 hours.
+    Fix: resolve dates from the market cache (passed in from main.py), which
+    contains the real expiry dates fetched from the markets API. Zero extra
+    API calls — the cache is already loaded every 5 minutes anyway.
+
+    For tickers not in the cache (manually placed in categories we don't scan),
+    falls back to a direct GET /markets/{ticker}.
     """
-    exited = 0
+    exited  = 0
     no_date = 0
+    from client import price_cents as _pc
+
+    # Build a ticker → market dict from the cache for O(1) lookups
+    cache: Dict[str, Dict] = {}
+    if markets:
+        for m in markets:
+            t = m.get("ticker", "")
+            if t:
+                cache[t] = m
+
+    logger.info(f"[CLEANUP] Market cache has {len(cache)} entries")
 
     try:
         all_positions: List[Dict] = client.get_positions()
@@ -269,27 +286,27 @@ def cleanup_long_dated_positions(client, risk_manager) -> int:
         side = "yes" if net > 0 else "no"
         qty  = abs(net)
 
-        # ── Resolve close date — prefer data already in the position object ──
-        close_time = (pos.get("close_time") or
-                      pos.get("expiration_time") or
-                      pos.get("market_close_time") or "")
+        # ── Get resolution date from MARKET data, not position object ────────
+        # The position object's close_time = trading window close (often today).
+        # The market object's close_time = actual resolution date. Use that.
+        mkt_data = cache.get(ticker)
 
-        if not close_time:
+        if not mkt_data:
+            # Not in cache (manually placed, or category we don't scan) — fetch
             try:
-                raw  = client.get_market(ticker)
-                mkt  = raw.get("market", raw)
-                close_time = mkt.get("close_time") or mkt.get("expiration_time") or ""
-                time.sleep(0.1)
-            except Exception:
-                pass
+                raw      = client.get_market(ticker)
+                mkt_data = raw.get("market", raw)
+                time.sleep(0.15)
+            except Exception as e:
+                logger.debug(f"[CLEANUP] Can't fetch market {ticker}: {e}")
+                no_date += 1
+                continue
 
-        if not close_time:
-            no_date += 1
-            logger.debug(f"[CLEANUP] No close date for {ticker} — skipping")
-            continue
+        days = days_to_close(mkt_data)
 
-        days = days_to_close({"close_time": close_time})
         if days is None:
+            # Already resolved or date unparseable
+            logger.debug(f"[CLEANUP] No resolution date for {ticker} — skipping")
             no_date += 1
             continue
 
@@ -297,20 +314,16 @@ def cleanup_long_dated_positions(client, risk_manager) -> int:
             logger.debug(f"[CLEANUP] {ticker} {days:.0f}d — keeping")
             continue
 
-        # ── Exit ──────────────────────────────────────────────────────────────
+        # ── This position is too far out — sell it ────────────────────────────
         logger.info(f"[CLEANUP] SELLING {ticker} | {side.upper()} x{qty} | {days:.0f}d out")
+
         try:
             mid = client.get_mid_price_cents(ticker)
         except Exception:
             mid = None
 
         if not mid:
-            try:
-                from client import price_cents as _pc
-                mid = _pc(pos, "yes_price") if side == "yes" else _pc(pos, "no_price")
-            except Exception:
-                pass
-            mid = mid or 50
+            mid = (_pc(pos, "yes_price") if side == "yes" else _pc(pos, "no_price")) or 50
 
         exit_price = max(mid - 2, 1)
 
@@ -323,12 +336,7 @@ def cleanup_long_dated_positions(client, risk_manager) -> int:
             if ticker in risk_manager.open_positions:
                 pnl = risk_manager.record_close(ticker, exit_price)
             else:
-                avg_cents = 50
-                try:
-                    from client import price_cents as _pc
-                    avg_cents = _pc(pos, "average_price") or avg_cents
-                except Exception:
-                    pass
+                avg_cents = _pc(pos, "average_price") or 50
                 pnl = (exit_price - avg_cents) * qty / 100
 
             risk_manager.log_trade(

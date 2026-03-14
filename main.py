@@ -92,13 +92,14 @@ def run_monitor():
 
 def run_cleanup():
     """Exit all portfolio positions resolving beyond MAX_POSITION_DAYS (30 days).
-    Catches manually placed long-term bets and anything that slipped past entry filters.
-    Runs once at startup then every 4 hours."""
+    Passes the market cache so cleanup uses real resolution dates, not the
+    per-session trading-window close_time that Kalshi puts on position objects."""
     if DRY_RUN:
         logger.info("[CLEANUP] DRY-RUN — skipping long-dated position sweep")
         return
     logger.info("━━━ LONG-DATED CLEANUP ━━━")
-    cleanup_long_dated_positions(client, risk_manager)
+    markets = get_cached_markets()
+    cleanup_long_dated_positions(client, risk_manager, markets)
 
 def run_analysis():
     """Daily analyst — scores strategies and rebalances config if needed."""
