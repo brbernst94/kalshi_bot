@@ -86,19 +86,29 @@ FADE_CONFIRMATION_HOURS  = 0.5
 FADE_MAX_POS_PCT         = 0.22
 
 # ── Strategy Allocation ───────────────────────────────────────────────────────
+# ── Strategy Allocation ───────────────────────────────────────────────────────
+# Rebalanced based on 3-day performance data (Mar 11-13):
+# datarelease: 24.7x profit factor, 79% WR — dominant strategy
+# weather: 79% WR, +$9.90 avg — own allocation broken out from datarelease
+# momentum: BTC 15m only remaining, +$0.29 avg
+# mentions: +$4.50 avg, proven edge on presidential/political mention markets
+# whale: reduced — now allowlist-only, lower vol expected
 STRATEGY_ALLOCATION = {
-    "whale":       0.28,   # Whale copy — working, proven real returns
-    "momentum":    0.32,   # Trend-following on top-60 high-volume markets (replaces bond/fade/longshot)
-    "arb":         0.15,   # Intra-Kalshi arb — risk-free when YES+NO < $1.00
-    "datarelease": 0.25,   # CPI/Fed/NFP pre-release — highest edge per Fed research
+    "datarelease": 0.70,
+    "momentum":    0.10,
+    "weather":     0.10,
+    "whale":       0.05,
+    "mentions":    0.05,
 }
 
 # ── Scheduling ────────────────────────────────────────────────────────────────
-WHALE_SCAN_MINS      = 3
-MOMENTUM_SCAN_MINS   = 3   # Trend following — same cadence as market cache refresh
-MONITOR_SCAN_MINS    = 3
-ARB_SCAN_MINS        = 2   # Arb opportunities close fast — scan every 2 min
+WHALE_SCAN_MINS       = 3
+MOMENTUM_SCAN_MINS    = 3
+MONITOR_SCAN_MINS     = 3
+ARB_SCAN_MINS         = 2
 DATARELEASE_SCAN_MINS = 5
+WEATHER_SCAN_MINS     = 10
+MENTIONS_SCAN_MINS    = 5
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_LEVEL      = "DEBUG"

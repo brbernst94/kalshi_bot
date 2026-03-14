@@ -31,8 +31,12 @@ import whale as whale_strat
 import momentum as momentum_strat
 import datarelease as datarelease_strat
 import arb as arb_strat
+import weather as weather_strat
+import mentions as mentions_strat
 from config import (
-    WHALE_SCAN_MINS, MOMENTUM_SCAN_MINS, MONITOR_SCAN_MINS, ARB_SCAN_MINS, DATARELEASE_SCAN_MINS
+    WHALE_SCAN_MINS, MOMENTUM_SCAN_MINS, MONITOR_SCAN_MINS,
+    ARB_SCAN_MINS, DATARELEASE_SCAN_MINS,
+    WEATHER_SCAN_MINS, MENTIONS_SCAN_MINS,
 )
 
 setup_logging()
@@ -84,6 +88,18 @@ def run_datarelease():
     markets = get_cached_markets()
     c = datarelease_strat.scan(client, risk_manager, markets)
     if not DRY_RUN: datarelease_strat.execute(client, risk_manager, c)
+
+def run_weather():
+    logger.info("━━━ WEATHER CYCLE ━━━")
+    markets = get_cached_markets()
+    c = weather_strat.scan(client, risk_manager, markets)
+    if not DRY_RUN: weather_strat.execute(client, risk_manager, c)
+
+def run_mentions():
+    logger.info("━━━ MENTIONS CYCLE ━━━")
+    markets = get_cached_markets()
+    c = mentions_strat.scan(client, risk_manager, markets)
+    if not DRY_RUN: mentions_strat.execute(client, risk_manager, c)
 
 def run_monitor():
     global cycle
@@ -176,22 +192,22 @@ def main():
     schedule.every(ARB_SCAN_MINS).minutes.do(run_arb)
     schedule.every(MOMENTUM_SCAN_MINS).minutes.do(run_momentum)
     schedule.every(DATARELEASE_SCAN_MINS).minutes.do(run_datarelease)
+    schedule.every(WEATHER_SCAN_MINS).minutes.do(run_weather)
+    schedule.every(MENTIONS_SCAN_MINS).minutes.do(run_mentions)
     schedule.every(MONITOR_SCAN_MINS).minutes.do(run_monitor)
-    # Sweep long-dated positions every 4 hours — catches manual bets and drift
     schedule.every(4).hours.do(run_cleanup)
 
-    # Daily analysis at 00:15 UTC — after midnight reset, before first trades
     schedule.every().day.at("00:15").do(run_analysis)
-    # Monthly summary at end of day
     schedule.every().day.at("23:55").do(monthly_summary)
 
     logger.info("Running initial scan on startup...")
-    # Cleanup first — free up capital before strategies try to deploy it
     run_cleanup()
     run_whale()
     run_arb()
     run_momentum()
     run_datarelease()
+    run_weather()
+    run_mentions()
     run_monitor()
 
     logger.info("⏱  Main loop active. Daily analysis scheduled for 00:15 UTC.")
