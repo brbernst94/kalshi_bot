@@ -70,6 +70,8 @@ MOMENTUM_SKIP_PREFIXES = (
     "KXITN",
     # ── International soccer ─────────────────────────────────────────────────
     "KXUCL",                                    # catches KXUCLGAME, KXUCLSPREAD, KXUCLTOTAL
+    "KXUEL",                                    # UEFA Europa League (KXUELGAME, KXUELTOTAL)
+    "KXUECL",                                   # UEFA Europa Conference League
     "KXCONCACAF",
     "KXBRASILEIRO",                             # Brasileirao
     "KXARGPREMDIV",                             # Argentine Primera Division

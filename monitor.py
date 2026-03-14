@@ -236,19 +236,17 @@ def check_positions(client, risk_manager) -> int:
 
 def cleanup_long_dated_positions(client, risk_manager) -> int:
     """
-    Sweep ALL portfolio positions from the API and exit any that resolve
-    more than MAX_POSITION_DAYS days from now.
+    Sweep ALL portfolio positions and exit any resolving beyond MAX_POSITION_DAYS.
 
-    This catches:
-      - Manually placed long-term bets (Oscars, elections, year-end oil, etc.)
-      - Any bot-placed positions whose horizon slipped through entry filters
-      - Positions from before the 30-day rule was enforced
+    Uses close_time already present on the /portfolio/positions response —
+    zero extra API calls per position. Falls back to one GET /markets/{ticker}
+    only when close_time is absent from the position object.
 
-    Runs once at startup, then every 4 hours via main.py scheduler.
-    Returns the number of positions exited.
+    Catches manually-placed long-term bets that entry filters can't block.
+    Runs once at startup, then every 4 hours.
     """
     exited = 0
-    skipped_no_date = 0
+    no_date = 0
 
     try:
         all_positions: List[Dict] = client.get_positions()
@@ -256,7 +254,8 @@ def cleanup_long_dated_positions(client, risk_manager) -> int:
         logger.error(f"[CLEANUP] Failed to fetch portfolio positions: {e}")
         return 0
 
-    logger.info(f"[CLEANUP] Scanning {len(all_positions)} portfolio positions for long-dated exits...")
+    logger.info(f"[CLEANUP] Scanning {len(all_positions)} positions "
+                f"(>{MAX_POSITION_DAYS}d = exit)...")
 
     for pos in all_positions:
         ticker = pos.get("ticker") or pos.get("market_ticker", "")
@@ -265,104 +264,88 @@ def cleanup_long_dated_positions(client, risk_manager) -> int:
 
         net = int(pos.get("net_position", pos.get("position", 0)) or 0)
         if net == 0:
-            continue  # Already flat
+            continue
 
-        # Determine side and quantity
         side = "yes" if net > 0 else "no"
         qty  = abs(net)
 
-        # ── Get market close date ──────────────────────────────────────────
-        try:
-            raw = client.get_market(ticker)
-            market_data = raw.get("market", raw)   # API wraps in {"market": {...}}
-        except Exception as e:
-            logger.debug(f"[CLEANUP] Couldn't fetch market data for {ticker}: {e}")
-            skipped_no_date += 1
-            continue
+        # ── Resolve close date — prefer data already in the position object ──
+        close_time = (pos.get("close_time") or
+                      pos.get("expiration_time") or
+                      pos.get("market_close_time") or "")
 
-        days = days_to_close(market_data)
+        if not close_time:
+            try:
+                raw  = client.get_market(ticker)
+                mkt  = raw.get("market", raw)
+                close_time = mkt.get("close_time") or mkt.get("expiration_time") or ""
+                time.sleep(0.1)
+            except Exception:
+                pass
 
-        if days is None:
-            # Market may already be resolved — skip
-            skipped_no_date += 1
+        if not close_time:
+            no_date += 1
             logger.debug(f"[CLEANUP] No close date for {ticker} — skipping")
             continue
 
-        if days <= MAX_POSITION_DAYS:
-            # Within our horizon — leave it alone
-            logger.debug(f"[CLEANUP] {ticker} resolves in {days:.0f}d — keeping")
+        days = days_to_close({"close_time": close_time})
+        if days is None:
+            no_date += 1
             continue
 
-        # ── This position is too long-dated — exit it ──────────────────────
-        logger.info(f"[CLEANUP] FLAGGED {ticker} | {side.upper()} x{qty} | resolves in {days:.0f}d (>{MAX_POSITION_DAYS}d limit) — selling")
+        if days <= MAX_POSITION_DAYS:
+            logger.debug(f"[CLEANUP] {ticker} {days:.0f}d — keeping")
+            continue
+
+        # ── Exit ──────────────────────────────────────────────────────────────
+        logger.info(f"[CLEANUP] SELLING {ticker} | {side.upper()} x{qty} | {days:.0f}d out")
         try:
             mid = client.get_mid_price_cents(ticker)
         except Exception:
             mid = None
 
-        if mid is None:
-            # Fall back to average price from position data, slightly discounted
-            avg_raw = pos.get("average_price") or pos.get("yes_price") or 50
+        if not mid:
             try:
                 from client import price_cents as _pc
                 mid = _pc(pos, "yes_price") if side == "yes" else _pc(pos, "no_price")
-                if not mid:
-                    mid = int(float(str(avg_raw).replace("$","").replace("¢","")) )
             except Exception:
-                mid = 50
+                pass
+            mid = mid or 50
 
-        # Place a limit sell slightly aggressive (mid - 2¢) to ensure fill;
-        # for very low-priced positions just take whatever we can get
         exit_price = max(mid - 2, 1)
 
         try:
             client.place_limit_order(
-                ticker=ticker,
-                side=side,
-                action="sell",
-                price_cents=exit_price,
-                count=qty,
+                ticker=ticker, side=side, action="sell",
+                price_cents=exit_price, count=qty,
             )
 
-            # Record in risk manager if we're tracking it
             if ticker in risk_manager.open_positions:
                 pnl = risk_manager.record_close(ticker, exit_price)
             else:
-                # Manually placed position — estimate pnl from avg_price
                 avg_cents = 50
                 try:
-                    avg_raw = pos.get("average_price") or 0
-                    avg_cents = int(float(str(avg_raw).replace("$","").replace("¢","")))
+                    from client import price_cents as _pc
+                    avg_cents = _pc(pos, "average_price") or avg_cents
                 except Exception:
                     pass
                 pnl = (exit_price - avg_cents) * qty / 100
 
             risk_manager.log_trade(
-                strategy="cleanup",
-                ticker=ticker,
-                side=side,
-                action="sell",
-                price_cents=exit_price,
-                count=qty,
-                expected_pnl=pnl,
+                strategy="cleanup", ticker=ticker, side=side, action="sell",
+                price_cents=exit_price, count=qty, expected_pnl=pnl,
                 status="CLOSE",
                 notes=f"LONG_DATED {days:.0f}d > {MAX_POSITION_DAYS}d limit"
             )
             exited += 1
             logger.info(
                 f"[CLEANUP] EXIT {ticker} | {side.upper()} x{qty} @ {exit_price}¢ | "
-                f"resolves in {days:.0f}d (>{MAX_POSITION_DAYS}d limit) | "
-                f"est. pnl=${pnl:+.2f}"
+                f"{days:.0f}d | est. pnl=${pnl:+.2f}"
             )
-
-            # Rate-limit to avoid hammering the API
             time.sleep(0.4)
 
         except Exception as e:
             logger.error(f"[CLEANUP] Exit order failed for {ticker}: {e}")
 
-    logger.info(
-        f"[CLEANUP] Done — {exited} long-dated position(s) exited, "
-        f"{skipped_no_date} skipped (no date / already resolved)"
-    )
+    logger.info(f"[CLEANUP] Done — {exited} exited, {no_date} skipped (no date)")
     return exited

@@ -68,6 +68,8 @@ def fetch_large_fills(client) -> List[Dict]:
         "KXWTA", "KXITN",
         # International soccer / basketball
         "KXUCL",                                # KXUCLGAME, KXUCLSPREAD, KXUCLTOTAL
+        "KXUEL",                                # UEFA Europa League (KXUELGAME, KXUELTOTAL)
+        "KXUECL",                               # UEFA Europa Conference League
         "KXCONCACAF",
         "KXBRASILEIRO", "KXARGPREMDIV",
         "KXEUROLEAGUE", "KXFIBACHAMP",
