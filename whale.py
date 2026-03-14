@@ -194,12 +194,19 @@ def get_member_stats(client, member_id: str) -> Dict:
     return stats
 
 
-def scan(client, risk_manager) -> List[Dict]:
+def scan(client, risk_manager, markets: List[Dict] = None) -> List[Dict]:
     logger.info("[WHALE] Scanning for large conviction fills...")
     raw_fills  = fetch_large_fills(client)
+
+    # Build ticker→market lookup from cache for days check
+    from bond import days_to_close
+    from config import MAX_POSITION_DAYS
+    cache = {m.get("ticker", ""): m for m in (markets or [])}
+
     candidates = []
 
     for fill in raw_fills:
+        ticker    = fill["ticker"]
         member_id = fill["member_id"]
         stats     = get_member_stats(client, member_id)
 
@@ -209,9 +216,18 @@ def scan(client, risk_manager) -> List[Dict]:
         if tracked_only_gate and stats["win_rate"] < WHALE_MIN_WIN_RATE and not fill["is_tracked"]:
             continue
 
+        # ── Days check — skip long-dated markets ──────────────────────────
+        mkt  = cache.get(ticker)
+        days = days_to_close(mkt) if mkt else None
+        if days is not None and days > MAX_POSITION_DAYS:
+            logger.debug(f"[WHALE] SKIP {ticker} — resolves in {days:.0f}d (>{MAX_POSITION_DAYS}d limit)")
+            continue
+        # If not in cache (market closed to new orders), still allow — it may be
+        # a same-day or this-week market we don't scan. Cleanup will catch it if not.
+
         # Cool-down: skip if we already copied this ticker recently
-        if fill["ticker"] in _recent_copies:
-            last = _recent_copies[fill["ticker"]]
+        if ticker in _recent_copies:
+            last = _recent_copies[ticker]
             elapsed = (datetime.now(timezone.utc) -
                        last.get("copied_at", datetime.now(timezone.utc))
                        ).total_seconds() / 60

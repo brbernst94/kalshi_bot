@@ -63,7 +63,8 @@ def get_cached_markets():
 
 def run_whale():
     logger.info("━━━ WHALE CYCLE ━━━")
-    c = whale_strat.scan(client, risk_manager)
+    markets = get_cached_markets()
+    c = whale_strat.scan(client, risk_manager, markets)
     if not DRY_RUN: whale_strat.execute(client, risk_manager, c)
 
 def run_arb():
