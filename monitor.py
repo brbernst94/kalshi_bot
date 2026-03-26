@@ -1,14 +1,12 @@
 """
 monitor.py — Position Monitor (Kalshi)
 ========================================
-Runs every 1 minute. Checks every open position against 6 exit signals:
+Runs every 3 minutes. Checks every open position against 4 exit signals:
 
-  1. STOP LOSS       — price moved against us past threshold
-  2. TAKE PROFIT     — hit target gain, lock it in
-  3. TRAILING STOP   — price ran our way then reversed — protect gains
-  4. TIME STOP       — held too long with no resolution, cut and redeploy
-  5. RESOLUTION      — market resolved (price at 99¢ or 1¢), exit immediately
-  6. FADE REVERSAL   — fade position but momentum still going wrong way
+  1. RESOLUTION      — market resolved (price at 99¢ or 1¢), exit immediately
+  2. NEAR_CERTAIN    — price ≥97¢, redeploy capital rather than wait
+  3. TAKE PROFIT     — price gained 70% from entry (e.g. 50¢ → 85¢)
+  4. STOP LOSS       — price dropped 10% from entry (e.g. 50¢ → 45¢)
 
 Also provides cleanup_long_dated_positions() which sweeps ALL portfolio
 positions (including manually placed ones) and exits anything resolving
@@ -27,78 +25,13 @@ from config import MAX_POSITION_DAYS
 
 logger = logging.getLogger(__name__)
 
-# ── Per-strategy stop loss ─────────────────────────────────────────────────────
-STOP_LOSS_CENTS = {
-    "bond":     -12,   # Near-certain market — if drops 12¢ something changed
-    "fade":     -8,    # Short-duration — cut quickly if wrong
-    "longshot": -999,  # Lottery ticket — hold to resolution
-    "whale":    -10,   # Tightened from -15: sports games move fast
-}
-
-# ── Take profit ────────────────────────────────────────────────────────────────
-TAKE_PROFIT_CENTS = {
-    "bond":     None,  # Hold to resolution for full $1.00 payout
-    "fade":     8,     # Reversion captured
-    "longshot": 35,    # Longshot ran — take profit before reversal
-    "whale":    10,    # Trail the whale
-}
-
-# ── Trailing stop ─────────────────────────────────────────────────────────────
-# ACTIVATE: cents of gain before trailing stop kicks in
-# TRAIL:    how many cents below peak we allow before exiting
-TRAIL_ACTIVATE = {"fade": 5,  "longshot": 20, "whale": 6}
-TRAIL_DISTANCE = {"fade": 4,  "longshot": 15, "whale": 5}
-
-# ── Time stop (hours) ─────────────────────────────────────────────────────────
-TIME_STOP_HOURS = {
-    "bond":     72,    # 3 days
-    "fade":     6,     # 6 hours — wrong if no reversion by then
-    "longshot": 240,   # 10 days
-    "whale":    24,    # 1 day
-}
+# ── Global stop loss / take profit (percentage of entry price) ────────────────
+STOP_LOSS_PCT   = 0.10   # Exit if price drops 10% from entry (e.g. 50¢ → 45¢)
+TAKE_PROFIT_PCT = 0.70   # Exit if price gains 70% from entry (e.g. 50¢ → 85¢)
 
 # Resolution thresholds
 RESOLUTION_YES = 98
 RESOLUTION_NO  = 2
-
-# Fade momentum bail — if price moves another X¢ wrong since last check, exit
-FADE_MOMENTUM_BAIL = 5
-
-
-def _check_trailing_stop(strategy: str, pos: Dict, mid: int) -> Optional[str]:
-    activate = TRAIL_ACTIVATE.get(strategy)
-    trail    = TRAIL_DISTANCE.get(strategy)
-    if not activate or not trail:
-        return None
-    entry    = pos.get("entry_cents", 50)
-    peak     = pos.get("peak_cents", entry)
-    if (peak - entry) < activate:
-        return None
-    trail_level = peak - trail
-    if mid <= trail_level:
-        return f"TRAIL_STOP peak={peak}¢ now={mid}¢ floor={trail_level}¢"
-    return None
-
-
-def _check_time_stop(strategy: str, pos: Dict) -> Optional[str]:
-    max_h     = TIME_STOP_HOURS.get(strategy)
-    opened_at = pos.get("opened_at")
-    if not max_h or not opened_at:
-        return None
-    age_h = (datetime.now(timezone.utc) - opened_at).total_seconds() / 3600
-    if age_h >= max_h:
-        return f"TIME_STOP age={age_h:.1f}h max={max_h}h"
-    return None
-
-
-def _check_fade_reversal(pos: Dict, mid: int) -> Optional[str]:
-    entry     = pos.get("entry_cents", 50)
-    last_seen = pos.get("last_seen_cents", entry)
-    momentum  = mid - last_seen  # negative = still falling against us
-    move      = mid - entry
-    if move < 0 and momentum <= -FADE_MOMENTUM_BAIL:
-        return f"FADE_REVERSAL entry={entry}¢ now={mid}¢ momentum={momentum:+d}¢"
-    return None
 
 
 def check_positions(client, risk_manager) -> int:
@@ -123,12 +56,11 @@ def check_positions(client, risk_manager) -> int:
 
         move = mid - entry_cents
 
-        # Update peak for trailing stop
-        pos["peak_cents"] = max(pos.get("peak_cents", entry_cents), mid)
-        last_seen = pos.get("last_seen_cents", entry_cents)
-        pos["last_seen_cents"] = mid
+        # Compute percentage-based thresholds for this position
+        stop_loss_price   = round(entry_cents * (1 - STOP_LOSS_PCT))
+        take_profit_price = min(round(entry_cents * (1 + TAKE_PROFIT_PCT)), 97)
 
-        # ── 6 exit checks (priority order) ────────────────────────────────
+        # ── 4 exit checks (priority order) ────────────────────────────────
         reason = None
 
         # 1. Resolution
@@ -137,37 +69,21 @@ def check_positions(client, risk_manager) -> int:
         elif mid <= RESOLUTION_NO:
             reason = f"RESOLVED_NO {mid}¢"
 
-        # 1b. Near-certain — free up capital rather than sit on <$0.50 upside
-        # YES position at ≥97¢: max remaining gain is 3¢, not worth the hold
-        # NO position tracked under _NO key — entry_cents is NO price, mid is NO price
+        # 2. Near-certain — free up capital rather than sit on <$0.50 upside
         if not reason:
             is_no_leg = ticker.endswith("_NO") or pos.get("side") == "no"
             winning_price = mid if not is_no_leg else (100 - mid)
             if winning_price >= 97:
                 remaining_upside_cents = 100 - winning_price
-                reason = f"NEAR_CERTAIN {winning_price}¢ (${remaining_upside_cents*count/100:.2f} left on table — redeploying)"
+                reason = f"NEAR_CERTAIN {winning_price}¢ (${remaining_upside_cents*count/100:.2f} left — redeploying)"
 
-        # 2. Take profit
-        take = TAKE_PROFIT_CENTS.get(strategy)
-        if not reason and take and move >= take:
-            reason = f"TAKE_PROFIT +{move}¢"
+        # 3. Take profit — 70% gain on entry
+        if not reason and mid >= take_profit_price:
+            reason = f"TAKE_PROFIT {mid}¢ (entry={entry_cents}¢ target={take_profit_price}¢)"
 
-        # 3. Trailing stop
-        if not reason:
-            reason = _check_trailing_stop(strategy, pos, mid)
-
-        # 4. Fade reversal
-        if not reason and strategy == "fade":
-            reason = _check_fade_reversal(pos, mid)
-
-        # 5. Stop loss
-        stop = STOP_LOSS_CENTS.get(strategy, -20)
-        if not reason and move <= stop:
-            reason = f"STOP_LOSS {move:+d}¢"
-
-        # 6. Time stop
-        if not reason:
-            reason = _check_time_stop(strategy, pos)
+        # 4. Stop loss — 10% drop from entry
+        if not reason and mid <= stop_loss_price:
+            reason = f"STOP_LOSS {mid}¢ (entry={entry_cents}¢ floor={stop_loss_price}¢)"
 
         # ── Execute exit ───────────────────────────────────────────────────
         if reason:

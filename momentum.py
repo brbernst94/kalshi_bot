@@ -37,7 +37,7 @@ MOMENTUM_MIN_MOVE_CENTS = 5      # Minimum price move between cycles to trigger
 MOMENTUM_MIN_VOLUME     = 2000   # Minimum 24h contracts — ensures real liquidity
 MOMENTUM_TOP_N          = 60     # Only scan top N markets by volume each cycle
 MOMENTUM_MIN_DAYS       = 2      # Skip markets resolving in < 2 days (too volatile)
-MOMENTUM_MAX_DAYS       = 30     # Capped at global MAX_POSITION_DAYS — no long-dated bets
+MOMENTUM_MAX_DAYS       = 3      # Capped at global MAX_POSITION_DAYS — no long-dated bets
 MOMENTUM_MAX_POS_PCT    = 0.07   # Max 7% of balance per trade
 
 # Markets where price moves reflect REAL information (not game-state noise)
@@ -88,9 +88,15 @@ MOMENTUM_SKIP_PREFIXES = (
     "KXCS2", "KXLOL", "KXVALO", "KXRL", "KXDOTA", "KXESPORT",
     # Other leagues / misc
     "KXEFL", "KXCFL", "KXAFL", "KXSERIEB", "KXLIVTOUR", "KXIWMEN",
+    # ── Non-BTC 15m crypto (only BTC 15m has shown edge) ────────────────────
+    "KXETH15M", "KXXRP15M", "KXSOL15M",        # 9% / 33% win rate — blocked
     # ── Crypto daily contracts (15-min contracts NOT skipped — they work) ────
     "KXBTCD",                                   # Daily BTC price: -$1.19/trade avg
     "KXETHD", "KXSOLD", "KXXRPD",              # Other daily crypto contracts
+    # ── Crypto spot above/below format ───────────────────────────────────────
+    "KXBTC-", "KXETH-", "KXSOL-", "KXXRP-",   # Spot contracts — different format, no edge
+    # ── Index variants ───────────────────────────────────────────────────────
+    "KXSOLE-", "KXINXU-",
 )
 
 # ── In-memory state ───────────────────────────────────────────────────────────

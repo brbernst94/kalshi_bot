@@ -41,10 +41,13 @@ logger = logging.getLogger(__name__)
 DATA_RELEASE_PREFIXES = (
     "KXCPI", "KXFED", "KXFEDDECISION", "KXNFP",
     "KXGDP", "KXUNRATE", "KXPCE", "KXFOMC",
+    "KXJOBLESS", "KXJOBLESSCLAIMS",
+    "KXRETAIL", "KXHOUSING", "KXISM",
+    "KXPPI", "KXCORECPI",
 )
 
-# Maximum hours before release to enter a position (7 days — covers Fed meeting week)
-MAX_HOURS_BEFORE = 168
+# Maximum hours before release to enter a position (2 weeks — catches Fed meetings early)
+MAX_HOURS_BEFORE = 336
 # Minimum hours before release (avoid entering <2h out — too risky)
 MIN_HOURS_BEFORE = 2
 # Minimum price gap vs consensus to trade

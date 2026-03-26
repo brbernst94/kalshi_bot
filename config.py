@@ -38,19 +38,17 @@ CONTRACT_VALUE_USD     = 1.00      # Each contract pays $1.00 at resolution
 
 # ── Capital & Risk ─────────────────────────────────────────────────────────────
 STARTING_BANKROLL_USD    = 170.00
-MAX_SINGLE_POSITION_PCT  = 0.25    # Up to 25% on one high-conviction trade
+MAX_SINGLE_POSITION_PCT  = 0.20    # Max 20% per position
 MAX_DAILY_LOSS_PCT       = 0.20    # Hard stop if down 20% in a day
-MAX_SINGLE_POSITION_PCT  = 0.20   # Max 20% per position
-MAX_DAILY_LOSS_PCT       = 0.50    # Hard stop if down 50% in a day
 MAX_OPEN_POSITIONS       = 20      # Allow up to 20 simultaneous positions
 # Minimum NET edge after fees (need more than 1% just to break even)
-MIN_NET_EDGE             = 0.02   # 3.5% net edge minimum
+MIN_NET_EDGE             = 0.02   # 2% net edge minimum
 
 # ── Global time horizon cap ────────────────────────────────────────────────────
-# No strategy may open a position in a market resolving more than 30 days out.
+# No strategy may open a position in a market resolving more than 3 days out.
 # Monitor's cleanup sweep will also exit any existing portfolio positions
 # (including manually placed ones) beyond this horizon automatically.
-MAX_POSITION_DAYS = 30
+MAX_POSITION_DAYS = 3
 
 # ── Strategy-specific ─────────────────────────────────────────────────────────
 
@@ -105,7 +103,6 @@ STRATEGY_ALLOCATION = {
 WHALE_SCAN_MINS       = 3
 MOMENTUM_SCAN_MINS    = 3
 MONITOR_SCAN_MINS     = 3
-ARB_SCAN_MINS         = 2
 DATARELEASE_SCAN_MINS = 5
 WEATHER_SCAN_MINS     = 10
 MENTIONS_SCAN_MINS    = 5

@@ -30,13 +30,11 @@ from analyst   import run_daily_analysis
 import whale as whale_strat
 import momentum as momentum_strat
 import datarelease as datarelease_strat
-import arb as arb_strat
 import weather as weather_strat
 import mentions as mentions_strat
 from config import (
     WHALE_SCAN_MINS, MOMENTUM_SCAN_MINS, MONITOR_SCAN_MINS,
-    ARB_SCAN_MINS, DATARELEASE_SCAN_MINS,
-    WEATHER_SCAN_MINS, MENTIONS_SCAN_MINS,
+    DATARELEASE_SCAN_MINS, WEATHER_SCAN_MINS, MENTIONS_SCAN_MINS,
 )
 
 setup_logging()
@@ -70,12 +68,6 @@ def run_whale():
     markets = get_cached_markets()
     c = whale_strat.scan(client, risk_manager, markets)
     if not DRY_RUN: whale_strat.execute(client, risk_manager, c)
-
-def run_arb():
-    logger.info("━━━ ARB CYCLE ━━━")
-    markets = get_cached_markets()
-    opps = arb_strat.scan(client, risk_manager, markets)
-    if not DRY_RUN: arb_strat.execute(client, risk_manager, opps)
 
 def run_momentum():
     logger.info("━━━ MOMENTUM CYCLE ━━━")
@@ -189,7 +181,6 @@ def main():
 
     # ── Schedules ─────────────────────────────────────────────────────────────
     schedule.every(WHALE_SCAN_MINS).minutes.do(run_whale)
-    schedule.every(ARB_SCAN_MINS).minutes.do(run_arb)
     schedule.every(MOMENTUM_SCAN_MINS).minutes.do(run_momentum)
     schedule.every(DATARELEASE_SCAN_MINS).minutes.do(run_datarelease)
     schedule.every(WEATHER_SCAN_MINS).minutes.do(run_weather)
@@ -203,7 +194,6 @@ def main():
     logger.info("Running initial scan on startup...")
     run_cleanup()
     run_whale()
-    run_arb()
     run_momentum()
     run_datarelease()
     run_weather()
