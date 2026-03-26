@@ -165,7 +165,6 @@ def main():
     schedule.every().day.at("23:55").do(monthly_summary)
 
     logger.info("Running initial scan on startup...")
-    run_liquidate_all()
     run_datarelease()
     run_weather()
     run_monitor()

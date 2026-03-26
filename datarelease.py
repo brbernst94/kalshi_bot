@@ -108,17 +108,19 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
 
         hours = days * 24
         if not (MIN_HOURS_BEFORE <= hours <= MAX_HOURS_BEFORE):
-            logger.debug(f"[DATARELEASE] SKIP {ticker} | {hours:.1f}h to release (window {MIN_HOURS_BEFORE}-{MAX_HOURS_BEFORE}h)")
+            logger.info(f"[DATARELEASE] SKIP {ticker} | {hours:.1f}h to release")
             continue
 
         # Get current market price (handles _dollars strings and integer cents)
         yes_price = _pc(md, "yes_ask") or _pc(md, "last_price") or _pc(md, "yes_bid")
 
         if yes_price is None or yes_price == 0:
+            logger.info(f"[DATARELEASE] SKIP {ticker} | no price data")
             continue
 
         # Skip near-resolved markets
         if yes_price >= 97 or yes_price <= 3:
+            logger.info(f"[DATARELEASE] SKIP {ticker} | near-resolved {yes_price}¢")
             continue
 
         # Trade the favored side — no momentum filter, just take the market's
@@ -140,8 +142,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             "our_price": our_price,
             "ev":        round(ev, 3),
             "hours":     round(hours, 1),
-            "volume":    volume,
-            "momentum":  recent_move,
+            "volume":    int(md.get("volume", 0) or 0),
         })
 
     candidates.sort(key=lambda x: (x["volume"], x["ev"]), reverse=True)
