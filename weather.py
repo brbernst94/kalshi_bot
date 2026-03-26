@@ -355,6 +355,7 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
                 action="buy",
                 price_cents=c["entry_cents"],
                 count=count,
+                post_only=False,  # taker — guarantee immediate fill
             )
             risk_manager.record_open(c["ticker"], count, c["entry_cents"],
                                      "weather", side=c["side"])

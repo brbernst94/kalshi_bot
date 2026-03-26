@@ -81,50 +81,49 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
     # Filter to data release markets only
     release_markets = [m for m in markets
                        if _is_data_release_market(m.get("ticker", ""))]
-    logger.info(f"[DATARELEASE] {len(release_markets)} data release markets found")
+    logger.info(f"[DATARELEASE] {len(release_markets)} data release markets found in cache")
+
+    no_time = 0
+    out_of_window = 0
+    no_price = 0
+    near_resolved = 0
 
     for m in release_markets:
         ticker = m.get("ticker", "")
 
-        # Pre-filter by cached close_time — skip individual API call if already out of window
-        cached_days = days_to_close(m)
-        if cached_days is not None:
-            cached_hours = cached_days * 24
-            if not (MIN_HOURS_BEFORE <= cached_hours <= MAX_HOURS_BEFORE):
-                logger.debug(f"[DATARELEASE] SKIP {ticker} | cached {cached_hours:.0f}h out of window")
-                continue
-
-        try:
-            detail = client.get_market(ticker)
-            md     = detail.get("market", detail)
-        except Exception as e:
-            logger.debug(f"[DATARELEASE] Detail fetch failed {ticker}: {e}")
-            continue
-
-        days = days_to_close(md) or days_to_close(m)
+        # Use cached data — no individual API calls needed.
+        # Cache objects from GET /markets?event_ticker=... have all fields.
+        days = days_to_close(m)
         if days is None:
-            logger.debug(f"[DATARELEASE] SKIP {ticker} | no close time")
+            no_time += 1
             continue
 
         hours = days * 24
         if not (MIN_HOURS_BEFORE <= hours <= MAX_HOURS_BEFORE):
-            logger.info(f"[DATARELEASE] SKIP {ticker} | {hours:.1f}h to release")
+            out_of_window += 1
             continue
 
-        # Get current market price (handles _dollars strings and integer cents)
-        yes_price = _pc(md, "yes_ask") or _pc(md, "last_price") or _pc(md, "yes_bid")
+        # Price from cache (handles new _dollars format and legacy integer cents)
+        yes_price = _pc(m, "yes_ask") or _pc(m, "last_price") or _pc(m, "yes_bid")
+
+        if yes_price is None:
+            # Fallback: try individual API call for price
+            try:
+                detail    = client.get_market(ticker)
+                md        = detail.get("market", detail)
+                yes_price = _pc(md, "yes_ask") or _pc(md, "last_price") or _pc(md, "yes_bid")
+            except Exception as e:
+                logger.warning(f"[DATARELEASE] API fallback failed {ticker}: {e}")
 
         if yes_price is None or yes_price == 0:
-            logger.info(f"[DATARELEASE] SKIP {ticker} | no price data")
+            no_price += 1
+            logger.info(f"[DATARELEASE] NO_PRICE {ticker} | {hours:.0f}h | fields={list(m.keys())}")
             continue
 
-        # Skip near-resolved markets
         if yes_price >= 97 or yes_price <= 3:
-            logger.info(f"[DATARELEASE] SKIP {ticker} | near-resolved {yes_price}¢")
+            near_resolved += 1
             continue
 
-        # Trade the favored side — no momentum filter, just take the market's
-        # implied winner. YES if market thinks event is more likely, NO otherwise.
         if yes_price >= 50:
             side      = "yes"
             our_price = yes_price
@@ -134,23 +133,33 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             our_price = 100 - yes_price
             ev        = yes_price / (100 - yes_price) * 0.65
 
+        logger.info(
+            f"[DATARELEASE] CANDIDATE {ticker} | {yes_price}¢ → {side.upper()} "
+            f"@ {our_price}¢ | {hours:.0f}h | ev={ev:.2%}"
+        )
         candidates.append({
             "ticker":    ticker,
-            "title":     md.get("title", m.get("title", ""))[:80],
+            "title":     m.get("title", "")[:80],
             "yes_price": yes_price,
             "side":      side,
             "our_price": our_price,
             "ev":        round(ev, 3),
             "hours":     round(hours, 1),
-            "volume":    int(md.get("volume", 0) or 0),
+            "volume":    int(m.get("volume", 0) or 0),
         })
 
+    logger.info(
+        f"[DATARELEASE] Filter summary: {len(release_markets)} matched prefix | "
+        f"{no_time} no-close-time | {out_of_window} out-of-window | "
+        f"{no_price} no-price | {near_resolved} near-resolved | "
+        f"{len(candidates)} candidates"
+    )
+
     candidates.sort(key=lambda x: (x["volume"], x["ev"]), reverse=True)
-    logger.info(f"[DATARELEASE] {len(candidates)} candidates")
     for c in candidates[:4]:
         logger.info(
             f"  ↳ {c['title'][:55]} | {c['our_price']}¢ {c['side'].upper()} "
-            f"| ev={c['ev']:.2%} | {c['hours']:.0f}h to release | vol={c['volume']:,}"
+            f"| ev={c['ev']:.2%} | {c['hours']:.0f}h | vol={c['volume']:,}"
         )
     return candidates
 
@@ -177,10 +186,10 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
             continue
 
         try:
-            # Maker limit order — post at current price, pay 0 fees
+            # Taker order — cross the spread immediately, guarantee a fill
             client.place_limit_order(
                 ticker=c["ticker"], side=c["side"], action="buy",
-                price_cents=c["our_price"], count=count, post_only=True,
+                price_cents=c["our_price"], count=count, post_only=False,
             )
             risk_manager.record_open(c["ticker"], count, c["our_price"],
                                      "datarelease", side=c["side"])
