@@ -335,14 +335,31 @@ class KalshiClient:
         good_events = nonsports_events + sports_events  # non-sports prioritised
         logger.info(f"[CLIENT] {len(nonsports_events)} non-sports + {len(sports_events)} sports events | {kxmve_skipped} KXMVE skipped | {len(markets_by_ticker)} embedded markets")
 
-        # Step 3: Fetch per-event — always prioritise non-sports events
-        # This ensures bond/longshot/fade see financial/political markets even during March Madness
+        # Step 3: Fetch per-event.
+        # IMPORTANT: the events API returns volume=0 for most events, so sorting by
+        # volume does nothing — the slice is effectively arbitrary API order, which
+        # puts long-dated novelty markets first and buries weather/data-release markets.
+        # Fix: always fetch strategy-critical event prefixes first, then fill with others.
+        PRIORITY_EVENT_PREFIXES = (
+            "KXHIGH", "KXLOW", "KXPRECIP",              # Weather
+            "KXCPI", "KXFED", "KXFEDDECISION", "KXPCE", # Data release
+            "KXNFP", "KXGDP", "KXUNRATE", "KXFOMC",
+            "KXJOBLESS", "KXPPI", "KXISM", "KXRETAIL",
+        )
         if not markets_by_ticker and good_events:
-            # Non-sports: take up to 200 sorted by volume
-            nonsports_events.sort(key=lambda e: int(e.get("volume", 0) or 0), reverse=True)
-            sports_events.sort(key=lambda e: int(e.get("volume", 0) or 0), reverse=True)
-            fetch_events = nonsports_events[:200] + sports_events[:100]
-            logger.info(f"[CLIENT] Fetching per event: {len(nonsports_events[:200])} non-sports + {len(sports_events[:100])} sports")
+            priority_events = [e for e in nonsports_events
+                               if e.get("event_ticker", e.get("ticker", ""))
+                               .startswith(PRIORITY_EVENT_PREFIXES)]
+            other_events    = [e for e in nonsports_events
+                               if e not in priority_events]
+            # Always get all priority events + fill remainder up to 200
+            fetch_nonsports = priority_events + other_events[:max(0, 200 - len(priority_events))]
+            fetch_events    = fetch_nonsports + sports_events[:50]
+            logger.info(
+                f"[CLIENT] Fetching per event: {len(priority_events)} priority + "
+                f"{len(fetch_nonsports)-len(priority_events)} other non-sports + "
+                f"{len(sports_events[:50])} sports"
+            )
             for event in fetch_events:
                 eticker = event.get("event_ticker", event.get("ticker", ""))
                 try:
