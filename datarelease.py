@@ -174,6 +174,57 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             f"  ↳ {c['title'][:55]} | {c['our_price']}¢ {c['side'].upper()} "
             f"| ev={c['ev']:.2%} | {c['hours']:.0f}h | vol={c['volume']:,}"
         )
+
+    # ── Direct-API fallback ───────────────────────────────────────────────────
+    # If cache scan found nothing, make targeted calls to the events endpoint
+    # for all data-release event prefixes and check their markets directly.
+    # This catches events that weren't in the cache for any reason.
+    if not candidates:
+        logger.info("[DATARELEASE] Cache scan empty — trying direct event API scan")
+        seen = {m.get("ticker", "") for m in (markets or [])}
+        try:
+            events_resp = client.get_events(limit=200)
+            for event in events_resp.get("events", []):
+                eticker = event.get("event_ticker", event.get("ticker", ""))
+                if not eticker.startswith(DATA_RELEASE_PREFIXES):
+                    continue
+                if eticker.startswith(DATA_RELEASE_BLOCKLIST):
+                    continue
+                try:
+                    mresp = client.get_markets(limit=100, event_ticker=eticker)
+                    for m in mresp.get("markets", []):
+                        ticker = m.get("ticker", "")
+                        if not ticker or ticker in seen:
+                            continue
+                        seen.add(ticker)
+                        days = days_to_close(m)
+                        if days is None or not (MIN_HOURS_BEFORE <= days * 24 <= MAX_HOURS_BEFORE):
+                            continue
+                        yes_price = _pc(m, "yes_ask") or _pc(m, "last_price") or _pc(m, "yes_bid")
+                        if not yes_price or yes_price >= 97 or yes_price <= 3:
+                            continue
+                        side      = "yes" if yes_price >= 50 else "no"
+                        our_price = yes_price if side == "yes" else 100 - yes_price
+                        ev        = (100 - yes_price) / yes_price * 0.65 if side == "yes" \
+                                    else yes_price / (100 - yes_price) * 0.65
+                        logger.info(
+                            f"[DATARELEASE] DIRECT {ticker} | {yes_price}¢ → "
+                            f"{side.upper()} @ {our_price}¢ | {days*24:.0f}h"
+                        )
+                        candidates.append({
+                            "ticker": ticker, "title": m.get("title", "")[:80],
+                            "yes_price": yes_price, "side": side,
+                            "our_price": our_price, "ev": round(ev, 3),
+                            "hours": round(days * 24, 1),
+                            "volume": int(m.get("volume", 0) or 0),
+                        })
+                except Exception as e:
+                    logger.debug(f"[DATARELEASE] Direct event fetch failed {eticker}: {e}")
+        except Exception as e:
+            logger.warning(f"[DATARELEASE] Direct events scan failed: {e}")
+        candidates.sort(key=lambda x: (x["volume"], x["ev"]), reverse=True)
+        logger.info(f"[DATARELEASE] Direct scan found {len(candidates)} candidates")
+
     return candidates
 
 
