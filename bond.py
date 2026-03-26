@@ -30,7 +30,11 @@ logger = logging.getLogger(__name__)
 
 
 def days_to_close(market: Dict) -> Optional[float]:
-    for field in ("close_time", "expiration_time", "end_date"):
+    for field in (
+        "close_time", "expiration_time", "end_date",
+        "expected_expiration_time", "settlement_time", "resolution_time",
+        "close_date", "expiry", "expiry_time",
+    ):
         val = market.get(field)
         if val:
             try:

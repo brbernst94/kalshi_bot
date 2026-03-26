@@ -96,6 +96,10 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         days = days_to_close(m)
         if days is None:
             no_time += 1
+            if no_time == 1:  # log once so we can see the field names
+                time_fields = {k: v for k, v in m.items()
+                               if any(x in k for x in ("time", "date", "expir", "close", "settl"))}
+                logger.info(f"[DATARELEASE] NO_CLOSE_TIME sample {ticker} | time fields: {time_fields}")
             continue
 
         hours = days * 24
@@ -117,7 +121,10 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
 
         if yes_price is None or yes_price == 0:
             no_price += 1
-            logger.info(f"[DATARELEASE] NO_PRICE {ticker} | {hours:.0f}h | fields={list(m.keys())}")
+            # Log raw price fields so we can see exactly what the API returns
+            price_fields = {k: v for k, v in m.items()
+                            if any(x in k for x in ("price", "bid", "ask", "last"))}
+            logger.info(f"[DATARELEASE] NO_PRICE {ticker} | {hours:.0f}h | {price_fields}")
             continue
 
         if yes_price >= 97 or yes_price <= 3:
