@@ -211,8 +211,32 @@ class KalshiClient:
     def get_balance(self) -> float:
         """Returns total portfolio value: cash + value of open positions."""
         data = self._get("/portfolio/balance")
-        # balance field is in cents (integer) — not affected by fixed-point migration
-        cash = round(data.get("balance", 0) / 100, 2)
+
+        # Try _dollars fields first (March 2026 fixed-point migration)
+        cash = None
+        for field in ("balance_dollars", "available_balance_dollars", "cash_dollars",
+                      "total_balance_dollars", "portfolio_balance_dollars"):
+            v = data.get(field)
+            if v is not None:
+                try:
+                    cash = round(float(v), 2)
+                    break
+                except (TypeError, ValueError):
+                    pass
+        # Fall back to legacy integer cents fields
+        if cash is None:
+            for field in ("balance", "available_balance", "cash", "total_balance"):
+                v = data.get(field)
+                if v is not None:
+                    try:
+                        cash = round(int(float(v)) / 100, 2)
+                        break
+                    except (TypeError, ValueError):
+                        pass
+        if cash is None:
+            cash = 0.0
+            logger.warning(f"[CLIENT] get_balance: unrecognised balance field — keys={list(data.keys())}")
+        logger.debug(f"[CLIENT] Cash balance: ${cash:.2f} | raw keys: {list(data.keys())}")
 
         try:
             pos_data = self._get("/portfolio/positions")
@@ -237,7 +261,24 @@ class KalshiClient:
     def get_cash(self) -> float:
         """Returns spendable cash only (excludes value locked in positions)."""
         data = self._get("/portfolio/balance")
-        return round(data.get("balance", 0) / 100, 2)
+        # Try _dollars fields first (March 2026 fixed-point migration)
+        for field in ("balance_dollars", "available_balance_dollars", "cash_dollars",
+                      "total_balance_dollars", "portfolio_balance_dollars"):
+            v = data.get(field)
+            if v is not None:
+                try:
+                    return round(float(v), 2)
+                except (TypeError, ValueError):
+                    pass
+        # Fall back to legacy integer cents
+        for field in ("balance", "available_balance", "cash", "total_balance"):
+            v = data.get(field)
+            if v is not None:
+                try:
+                    return round(int(float(v)) / 100, 2)
+                except (TypeError, ValueError):
+                    pass
+        return 0.0
 
     def get_positions(self) -> List[Dict]:
         data = self._get("/portfolio/positions")
@@ -263,12 +304,15 @@ class KalshiClient:
     # ── Markets ───────────────────────────────────────────────────────────────
 
     def get_markets(self, limit: int = 200, cursor: Optional[str] = None,
-                    status: str = "open", event_ticker: Optional[str] = None) -> Dict:
+                    status: str = "open", event_ticker: Optional[str] = None,
+                    series_ticker: Optional[str] = None) -> Dict:
         params = {"limit": limit, "status": status}
         if cursor:
             params["cursor"] = cursor
         if event_ticker:
             params["event_ticker"] = event_ticker
+        if series_ticker:
+            params["series_ticker"] = series_ticker
         return self._get("/markets", params=params)
 
     def get_events(self, limit: int = 200, cursor: Optional[str] = None,

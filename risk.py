@@ -139,7 +139,10 @@ class RiskManager:
         except Exception:
             balance = STARTING_BANKROLL_USD
 
-        if self.daily_pnl <= -(balance * MAX_DAILY_LOSS_PCT):
+        # Only enforce daily loss if we actually have a negative P&L AND a real balance.
+        # Guard: if balance=0 (API field mismatch), 0 <= -(0*20%) = 0<=0 = True would
+        # reject every trade on a fresh deploy. Skip the check when balance is 0.
+        if balance > 0 and self.daily_pnl < 0 and self.daily_pnl <= -(balance * MAX_DAILY_LOSS_PCT):
             logger.warning(f"REJECT daily loss limit: ${self.daily_pnl:.2f} (limit=${balance * MAX_DAILY_LOSS_PCT:.2f} = {MAX_DAILY_LOSS_PCT:.0%} of ${balance:.2f})")
             return False
 
@@ -147,8 +150,9 @@ class RiskManager:
             logger.warning(f"REJECT max positions ({MAX_OPEN_POSITIONS})")
             return False
 
-        if cost_usd > balance * MAX_SINGLE_POSITION_PCT:
-            logger.warning(f"REJECT size ${cost_usd:.2f} > cap")
+        # Only enforce position size cap when we have a real balance to compare against
+        if balance > 0 and cost_usd > balance * MAX_SINGLE_POSITION_PCT:
+            logger.warning(f"REJECT size ${cost_usd:.2f} > cap (${balance * MAX_SINGLE_POSITION_PCT:.2f} = {MAX_SINGLE_POSITION_PCT:.0%} of ${balance:.2f})")
             return False
 
         if ticker in self.open_positions:

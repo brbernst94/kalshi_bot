@@ -119,7 +119,12 @@ def _fetch_nws_forecast(city_code: str) -> Optional[Dict]:
     Fetch today's high/low forecast from NWS for a given city code.
     Returns dict with 'high' and 'low' keys (°F), or None on failure.
     """
-    gridpoint = NWS_GRIDPOINTS.get(city_code.upper())
+    code = city_code.upper()
+    gridpoint = NWS_GRIDPOINTS.get(code)
+    # Kalshi sometimes uses a T-prefix before the city code (e.g. TBOS for Boston).
+    # If not found directly, try stripping a leading T from 4-letter codes.
+    if not gridpoint and len(code) == 4 and code[0] == "T":
+        gridpoint = NWS_GRIDPOINTS.get(code[1:])
     if not gridpoint:
         logger.debug(f"[WEATHER] No NWS gridpoint for city: {city_code}")
         return None
