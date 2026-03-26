@@ -88,6 +88,12 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
     no_price = 0
     near_resolved = 0
 
+    # Log first market's full key list so we can see actual API field names
+    if release_markets:
+        sample = release_markets[0]
+        logger.info(f"[DATARELEASE] Sample market keys: {sorted(sample.keys())}")
+        logger.info(f"[DATARELEASE] Sample market data: {dict(list(sample.items())[:12])}")
+
     for m in release_markets:
         ticker = m.get("ticker", "")
 
