@@ -343,7 +343,7 @@ class KalshiClient:
         PRIORITY_EVENT_PREFIXES = (
             "KXHIGH", "KXLOW", "KXPRECIP",              # Weather
             "KXCPI", "KXFED", "KXFEDDECISION", "KXPCE", # Data release
-            "KXNFP", "KXGDP", "KXUNRATE", "KXFOMC",
+            "KXNFP", "KXGDPUS", "KXGDPQ", "KXUNRATE", "KXFOMC",  # US GDP only (not KXGDPNOM/KXGDPYEAR)
             "KXJOBLESS", "KXPPI", "KXISM", "KXRETAIL",
         )
         if not markets_by_ticker and good_events:
