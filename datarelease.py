@@ -183,13 +183,22 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         logger.info("[DATARELEASE] Cache scan empty — trying direct event API scan")
         seen = {m.get("ticker", "") for m in (markets or [])}
         try:
-            events_resp = client.get_events(limit=200)
-            for event in events_resp.get("events", []):
+            # Paginate through all events to find data-release ones
+            all_dr_events = []
+            cursor = None
+            for _page in range(10):
+                resp   = client.get_events(limit=200, cursor=cursor)
+                events = resp.get("events", [])
+                for ev in events:
+                    et = ev.get("event_ticker", ev.get("ticker", ""))
+                    if et.startswith(DATA_RELEASE_PREFIXES) and not et.startswith(DATA_RELEASE_BLOCKLIST):
+                        all_dr_events.append(ev)
+                cursor = resp.get("cursor")
+                if not cursor:
+                    break
+            logger.info(f"[DATARELEASE] Direct scan found {len(all_dr_events)} data-release events")
+            for event in all_dr_events:
                 eticker = event.get("event_ticker", event.get("ticker", ""))
-                if not eticker.startswith(DATA_RELEASE_PREFIXES):
-                    continue
-                if eticker.startswith(DATA_RELEASE_BLOCKLIST):
-                    continue
                 try:
                     mresp = client.get_markets(limit=100, event_ticker=eticker)
                     for m in mresp.get("markets", []):
