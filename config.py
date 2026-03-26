@@ -85,27 +85,17 @@ FADE_MAX_POS_PCT         = 0.22
 
 # ── Strategy Allocation ───────────────────────────────────────────────────────
 # ── Strategy Allocation ───────────────────────────────────────────────────────
-# Rebalanced based on 3-day performance data (Mar 11-13):
-# datarelease: 24.7x profit factor, 79% WR — dominant strategy
-# weather: 79% WR, +$9.90 avg — own allocation broken out from datarelease
-# momentum: BTC 15m only remaining, +$0.29 avg
-# mentions: +$4.50 avg, proven edge on presidential/political mention markets
-# whale: reduced — now allowlist-only, lower vol expected
+# Only the two strategies with proven edge (24.7x and 18.2x profit factor).
+# Momentum (1.1x), Mentions (1.6x), and Whale (unproven) are disabled.
 STRATEGY_ALLOCATION = {
-    "datarelease": 0.70,
-    "momentum":    0.10,
-    "weather":     0.10,
-    "whale":       0.05,
-    "mentions":    0.05,
+    "datarelease": 0.50,
+    "weather":     0.50,
 }
 
 # ── Scheduling ────────────────────────────────────────────────────────────────
-WHALE_SCAN_MINS       = 3
-MOMENTUM_SCAN_MINS    = 3
 MONITOR_SCAN_MINS     = 3
 DATARELEASE_SCAN_MINS = 5
 WEATHER_SCAN_MINS     = 10
-MENTIONS_SCAN_MINS    = 5
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_LEVEL      = "DEBUG"

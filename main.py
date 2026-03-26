@@ -1,9 +1,8 @@
 """
 main.py — Kalshi Trading Bot
 ==============================
-CFTC-regulated prediction market trading.
-Four strategies, $500 seed, $5k/month target.
-Daily analyst runs at 00:15 UTC — scores strategies, rewrites config if needed.
+Two strategies only: Data Release (24.7x PF) and Weather (18.2x PF).
+All others disabled until proven.
 
 Usage:
   python main.py            # Live trading
@@ -27,14 +26,10 @@ from risk      import RiskManager
 from monitor   import check_positions, cleanup_long_dated_positions, liquidate_all_positions
 from dashboard import print_dashboard, monthly_summary
 from analyst   import run_daily_analysis
-import whale as whale_strat
-import momentum as momentum_strat
 import datarelease as datarelease_strat
 import weather as weather_strat
-import mentions as mentions_strat
 from config import (
-    WHALE_SCAN_MINS, MOMENTUM_SCAN_MINS, MONITOR_SCAN_MINS,
-    DATARELEASE_SCAN_MINS, WEATHER_SCAN_MINS, MENTIONS_SCAN_MINS,
+    MONITOR_SCAN_MINS, DATARELEASE_SCAN_MINS, WEATHER_SCAN_MINS,
 )
 
 setup_logging()
@@ -45,15 +40,14 @@ risk_manager = None
 DRY_RUN      = False
 cycle        = 0
 
-# Shared market cache — fetched once per minute, shared across all strategies
+# Shared market cache — fetched once per 5 minutes, shared across strategies
 _market_cache      = []
 _market_cache_time = 0
 
 def get_cached_markets():
     global _market_cache, _market_cache_time
-    import time
     now = time.time()
-    if now - _market_cache_time > 300:   # refresh every 5 minutes
+    if now - _market_cache_time > 300:
         try:
             _market_cache      = client.get_all_open_markets()
             _market_cache_time = now
@@ -62,18 +56,6 @@ def get_cached_markets():
             logger.error(f"[CACHE] Market fetch failed: {e}")
     return _market_cache
 
-
-def run_whale():
-    logger.info("━━━ WHALE CYCLE ━━━")
-    markets = get_cached_markets()
-    c = whale_strat.scan(client, risk_manager, markets)
-    if not DRY_RUN: whale_strat.execute(client, risk_manager, c)
-
-def run_momentum():
-    logger.info("━━━ MOMENTUM CYCLE ━━━")
-    markets = get_cached_markets()
-    c = momentum_strat.scan(client, risk_manager, markets)
-    if not DRY_RUN: momentum_strat.execute(client, risk_manager, c)
 
 def run_datarelease():
     logger.info("━━━ DATA RELEASE CYCLE ━━━")
@@ -86,12 +68,6 @@ def run_weather():
     markets = get_cached_markets()
     c = weather_strat.scan(client, risk_manager, markets)
     if not DRY_RUN: weather_strat.execute(client, risk_manager, c)
-
-def run_mentions():
-    logger.info("━━━ MENTIONS CYCLE ━━━")
-    markets = get_cached_markets()
-    c = mentions_strat.scan(client, risk_manager, markets)
-    if not DRY_RUN: mentions_strat.execute(client, risk_manager, c)
 
 def run_monitor():
     global cycle
@@ -108,9 +84,7 @@ def run_liquidate_all():
     liquidate_all_positions(client, risk_manager)
 
 def run_cleanup():
-    """Exit all portfolio positions resolving beyond MAX_POSITION_DAYS.
-    Passes the market cache so cleanup uses real resolution dates, not the
-    per-session trading-window close_time that Kalshi puts on position objects."""
+    """Exit all portfolio positions resolving beyond MAX_POSITION_DAYS."""
     if DRY_RUN:
         logger.info("[CLEANUP] DRY-RUN — skipping long-dated position sweep")
         return
@@ -128,7 +102,6 @@ def run_analysis():
                 "⚠️  Config rebalanced. New allocation: " +
                 " | ".join(f"{k}={v:.0%}" for k, v in new_alloc.items())
             )
-            logger.info("   Strategies will use new weights on next scan cycle.")
         else:
             logger.info("✅ All strategies performing — no rebalancing needed.")
     except Exception as e:
@@ -145,12 +118,9 @@ def main():
     global client, risk_manager, DRY_RUN
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run",  action="store_true",
-                        help="Scan only — no orders placed")
-    parser.add_argument("--demo",     action="store_true",
-                        help="Use Kalshi demo environment")
-    parser.add_argument("--analyze",  action="store_true",
-                        help="Run daily analysis immediately and exit")
+    parser.add_argument("--dry-run",  action="store_true")
+    parser.add_argument("--demo",     action="store_true")
+    parser.add_argument("--analyze",  action="store_true")
     args    = parser.parse_args()
     DRY_RUN = args.dry_run
 
@@ -163,7 +133,6 @@ def main():
     logger.info(f"🚀 Kalshi Bot | {mode} | Target: $5,000/month")
     logger.info(f"   Base URL: {__import__('config').BASE_URL}")
 
-    # Analysis-only mode (useful for manual inspection)
     if args.analyze:
         run_analysis()
         sys.exit(0)
@@ -188,27 +157,20 @@ def main():
     signal.signal(signal.SIGTERM, shutdown)
 
     # ── Schedules ─────────────────────────────────────────────────────────────
-    schedule.every(WHALE_SCAN_MINS).minutes.do(run_whale)
-    schedule.every(MOMENTUM_SCAN_MINS).minutes.do(run_momentum)
     schedule.every(DATARELEASE_SCAN_MINS).minutes.do(run_datarelease)
     schedule.every(WEATHER_SCAN_MINS).minutes.do(run_weather)
-    schedule.every(MENTIONS_SCAN_MINS).minutes.do(run_mentions)
     schedule.every(MONITOR_SCAN_MINS).minutes.do(run_monitor)
     schedule.every(4).hours.do(run_cleanup)
-
     schedule.every().day.at("00:15").do(run_analysis)
     schedule.every().day.at("23:55").do(monthly_summary)
 
     logger.info("Running initial scan on startup...")
-    run_liquidate_all()   # sell everything — start fresh
-    run_whale()
-    run_momentum()
+    run_liquidate_all()
     run_datarelease()
     run_weather()
-    run_mentions()
     run_monitor()
 
-    logger.info("⏱  Main loop active. Daily analysis scheduled for 00:15 UTC.")
+    logger.info("⏱  Main loop active.")
     while True:
         schedule.run_pending()
         time.sleep(20)
