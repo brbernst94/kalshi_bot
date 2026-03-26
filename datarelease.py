@@ -121,44 +121,31 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         if yes_price >= 97 or yes_price <= 3:
             continue
 
-        # Volume filter — only trade liquid markets (>$10k volume)
         volume = int(md.get("volume", 0) or 0)
-        if volume < 1000:  # 1000 contracts minimum
+        if volume < 100:  # lowered from 1000 — most upcoming releases have low volume
             continue
-
-        # Edge calculation:
-        # We don't have real-time Bloomberg consensus here, but we can
-        # apply a simple rule: markets priced 40-60¢ have maximum fee drag
-        # and maximum uncertainty — skip these.
-        # Markets priced 65-95¢ with upcoming releases are our target.
-        # The research shows post-CPI release, prices move 10-20¢ rapidly.
-        # Strategy: if market is at 70¢ and we believe it's 75¢ (based on
-        # recent macro data), the 5¢ edge after release is pure profit.
 
         # Estimate momentum from previous_yes_ask vs current — no API call needed
         prev_yes = _pc(m, "previous_yes_ask") or _pc(m, "previous_price")
         recent_move = (yes_price - prev_yes) if prev_yes else 0
 
-        # Only trade if there's directional conviction
-        if abs(recent_move) < 3 and 40 <= yes_price <= 60:
-            continue
-
-        # Trade direction: high-probability side OR momentum-driven
-        if yes_price >= 70:
-            # High favorite — buy YES as maker, collect when it resolves
+        # Trade the high-conviction side; mid-range requires recent momentum
+        if yes_price >= 60:
             side      = "yes"
             our_price = yes_price
             ev        = (100 - yes_price) / yes_price * 0.65
-        elif yes_price <= 30 and recent_move < -3:
-            # Price falling fast — buy NO (fade the drop continuation)
+        elif yes_price <= 40:
+            side      = "no"
+            our_price = 100 - yes_price
+            ev        = yes_price / (100 - yes_price) * 0.65
+        elif recent_move > 3:
+            side      = "yes"
+            our_price = yes_price
+            ev        = 0.06
+        elif recent_move < -3:
             side      = "no"
             our_price = 100 - yes_price
             ev        = 0.06
-        elif recent_move > 5 and yes_price < 85:
-            # Strong upward momentum before release
-            side      = "yes"
-            our_price = yes_price
-            ev        = 0.07
         else:
             continue
 

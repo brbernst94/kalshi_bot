@@ -42,7 +42,7 @@ MAX_SINGLE_POSITION_PCT  = 0.20    # Max 20% per position
 MAX_DAILY_LOSS_PCT       = 0.20    # Hard stop if down 20% in a day
 MAX_OPEN_POSITIONS       = 20      # Allow up to 20 simultaneous positions
 # Minimum NET edge after fees (need more than 1% just to break even)
-MIN_NET_EDGE             = 0.02   # 2% net edge minimum
+MIN_NET_EDGE             = 0.00   # Maker orders = 0% fee, no floor needed
 
 # ── Global time horizon cap ────────────────────────────────────────────────────
 # No strategy may open a position in a market resolving more than 3 days out.
