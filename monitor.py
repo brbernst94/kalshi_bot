@@ -173,8 +173,8 @@ def liquidate_all_positions(client, risk_manager) -> int:
         logger.info(f"[LIQUIDATE] Sample position data: {all_positions[0]}")
 
     def _get_net(p: dict) -> int:
-        for field in ("net_position", "position", "quantity", "contracts",
-                      "net_contracts", "total_held", "holdings", "size"):
+        for field in ("net_position", "position", "position_fp", "quantity",
+                      "contracts", "net_contracts", "total_held", "holdings", "size"):
             v = p.get(field)
             if v is not None:
                 try:
@@ -292,8 +292,8 @@ def cleanup_long_dated_positions(client, risk_manager,
             continue
 
         net = 0
-        for field in ("net_position", "position", "quantity", "contracts",
-                      "net_contracts", "total_held", "holdings", "size"):
+        for field in ("net_position", "position", "position_fp", "quantity",
+                      "contracts", "net_contracts", "total_held", "holdings", "size"):
             v = pos.get(field)
             if v is not None:
                 try:
