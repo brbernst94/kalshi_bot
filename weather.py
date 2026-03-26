@@ -216,8 +216,17 @@ def scan(client, risk_manager, markets: List[Dict]) -> List[Dict]:
     for m in weather_markets:
         ticker = m.get("ticker", "")
 
-        # Days check
+        # Days check — prefer cached close_time, fall back to date in ticker
         days = days_to_close(m)
+        if days is None:
+            # Parse date from ticker: KXHIGHTBOS-26MAR26-T56 → "26MAR26"
+            pm = re.search(r'-(\d{2}[A-Z]{3}\d{2})-', ticker.upper())
+            if pm:
+                try:
+                    dt = datetime.strptime(pm.group(1), "%d%b%y").replace(tzinfo=timezone.utc)
+                    days = (dt - datetime.now(timezone.utc)).total_seconds() / 86400
+                except Exception:
+                    days = None
         if days is None or days > MAX_DAYS_OUT or days < 0:
             continue
 

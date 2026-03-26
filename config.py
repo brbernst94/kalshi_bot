@@ -48,7 +48,7 @@ MIN_NET_EDGE             = 0.00   # Maker orders = 0% fee, no floor needed
 # No strategy may open a position in a market resolving more than 3 days out.
 # Monitor's cleanup sweep will also exit any existing portfolio positions
 # (including manually placed ones) beyond this horizon automatically.
-MAX_POSITION_DAYS = 3
+MAX_POSITION_DAYS = 14   # Match data release window (336h = 14 days)
 
 # ── Strategy-specific ─────────────────────────────────────────────────────────
 

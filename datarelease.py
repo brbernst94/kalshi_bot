@@ -121,33 +121,16 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
         if yes_price >= 97 or yes_price <= 3:
             continue
 
-        volume = int(md.get("volume", 0) or 0)
-        if volume < 100:  # lowered from 1000 — most upcoming releases have low volume
-            continue
-
-        # Estimate momentum from previous_yes_ask vs current — no API call needed
-        prev_yes = _pc(m, "previous_yes_ask") or _pc(m, "previous_price")
-        recent_move = (yes_price - prev_yes) if prev_yes else 0
-
-        # Trade the high-conviction side; mid-range requires recent momentum
-        if yes_price >= 60:
+        # Trade the favored side — no momentum filter, just take the market's
+        # implied winner. YES if market thinks event is more likely, NO otherwise.
+        if yes_price >= 50:
             side      = "yes"
             our_price = yes_price
             ev        = (100 - yes_price) / yes_price * 0.65
-        elif yes_price <= 40:
+        else:
             side      = "no"
             our_price = 100 - yes_price
             ev        = yes_price / (100 - yes_price) * 0.65
-        elif recent_move > 3:
-            side      = "yes"
-            our_price = yes_price
-            ev        = 0.06
-        elif recent_move < -3:
-            side      = "no"
-            our_price = 100 - yes_price
-            ev        = 0.06
-        else:
-            continue
 
         candidates.append({
             "ticker":    ticker,
