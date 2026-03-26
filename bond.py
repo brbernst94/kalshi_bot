@@ -42,9 +42,12 @@ def days_to_close(market: Dict) -> Optional[float]:
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
                 diff = (dt - datetime.now(timezone.utc)).total_seconds() / 86400
-                return diff if diff > 0 else None
+                if diff > 0:
+                    return diff
+                # diff <= 0 means this timestamp is in the past — try next field
+                # (e.g. close_time = trading window end, expiration_time = actual resolve)
             except Exception:
-                continue
+                pass
     return None
 
 
