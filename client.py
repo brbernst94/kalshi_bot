@@ -335,10 +335,10 @@ class KalshiClient:
         good_events = nonsports_events + sports_events  # non-sports prioritised
         logger.info(f"[CLIENT] {len(nonsports_events)} non-sports + {len(sports_events)} sports events | {kxmve_skipped} KXMVE skipped | {len(markets_by_ticker)} embedded markets")
 
-        # Step 3: Fetch per-event.
-        # IMPORTANT: the events API returns volume=0 for most events, so sorting by
-        # volume does nothing — the slice is effectively arbitrary API order, which
-        # puts long-dated novelty markets first and buries weather/data-release markets.
+        # Step 3: Fetch per-event to get FULL market data (price fields, close_time, etc).
+        # The events listing API returns embedded market stubs with NO price data — we
+        # must call GET /markets?event_ticker=X for each event to get yes_ask, last_price etc.
+        # IMPORTANT: always run this step regardless of embedded stubs already collected.
         # Fix: always fetch strategy-critical event prefixes first, then fill with others.
         PRIORITY_EVENT_PREFIXES = (
             "KXHIGH", "KXLOW", "KXPRECIP",              # Weather
@@ -346,7 +346,7 @@ class KalshiClient:
             "KXNFP", "KXGDPUS", "KXGDPQ", "KXUNRATE", "KXFOMC",  # US GDP only (not KXGDPNOM/KXGDPYEAR)
             "KXJOBLESS", "KXPPI", "KXISM", "KXRETAIL",
         )
-        if not markets_by_ticker and good_events:
+        if good_events:
             priority_events = [e for e in nonsports_events
                                if e.get("event_ticker", e.get("ticker", ""))
                                .startswith(PRIORITY_EVENT_PREFIXES)]
