@@ -76,11 +76,24 @@ class RiskManager:
         """Sync open_positions from actual API positions to survive redeployments."""
         try:
             api_positions = self.client.get_positions()
-            # Kalshi uses 'net_position' not 'position'
+
+            def _net(p):
+                """Extract net contract count from any Kalshi position field variant."""
+                for field in ("net_position", "position", "position_fp",
+                              "quantity", "contracts", "net_contracts",
+                              "total_held", "holdings", "size"):
+                    v = p.get(field)
+                    if v is not None:
+                        try:
+                            return int(float(v))
+                        except (ValueError, TypeError):
+                            pass
+                return 0
+
             api_tickers = {
                 p.get("ticker") or p.get("market_ticker", "")
                 for p in api_positions
-                if int(p.get("net_position", p.get("position", 0)) or 0) != 0
+                if _net(p) != 0
             }
             now = datetime.now(timezone.utc)
             stale = [
@@ -96,7 +109,7 @@ class RiskManager:
             # Add any API positions we don't have in memory
             for p in api_positions:
                 t = p.get("ticker") or p.get("market_ticker", "")
-                net = int(p.get("net_position", p.get("position", 0)) or 0)
+                net = _net(p)
                 if net != 0 and t and t not in self.open_positions and t not in self._recently_closed:
                     self.open_positions[t] = {
                         "count":       abs(net),
@@ -104,7 +117,7 @@ class RiskManager:
                         "strategy":    "unknown",
                         "side":        "yes" if net > 0 else "no",
                         "net_position": net,
-                        "opened_at":   __import__("datetime").datetime.now(__import__("datetime").timezone.utc),
+                        "opened_at":   datetime.now(timezone.utc),
                     }
                     logger.info(f"[RISK] Restored position {t} from API (net={net}, side={'yes' if net > 0 else 'no'})")
         except Exception as e:

@@ -38,12 +38,19 @@ from client import price_cents as _pc
 logger = logging.getLogger(__name__)
 
 # Economic release tickers to scan — these have the most volume and edge
+# NOTE: "KXGDP" is intentionally NOT included — it matches KXGDPNOM (foreign
+# annual GDP markets resolving ~1yr out). Use KXGDPUS/KXGDPQ for US GDP only.
 DATA_RELEASE_PREFIXES = (
     "KXCPI", "KXFED", "KXFEDDECISION", "KXNFP",
-    "KXGDP", "KXUNRATE", "KXPCE", "KXFOMC",
+    "KXGDPUS", "KXGDPQ", "KXUNRATE", "KXPCE", "KXFOMC",
     "KXJOBLESS", "KXJOBLESSCLAIMS",
     "KXRETAIL", "KXHOUSING", "KXISM",
     "KXPPI", "KXCORECPI",
+)
+
+# Blocklist: tickers starting with these are always skipped (foreign/annual markets)
+DATA_RELEASE_BLOCKLIST = (
+    "KXGDPNOM",  # Foreign nominal GDP (Mexico, Japan, India — resolve annually)
 )
 
 # Maximum hours before release to enter a position (2 weeks — catches Fed meetings early)
@@ -55,6 +62,8 @@ MIN_EDGE_CENTS   = 5
 
 
 def _is_data_release_market(ticker: str) -> bool:
+    if ticker.startswith(DATA_RELEASE_BLOCKLIST):
+        return False
     return ticker.startswith(DATA_RELEASE_PREFIXES)
 
 
@@ -76,6 +85,15 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
 
     for m in release_markets:
         ticker = m.get("ticker", "")
+
+        # Pre-filter by cached close_time — skip individual API call if already out of window
+        cached_days = days_to_close(m)
+        if cached_days is not None:
+            cached_hours = cached_days * 24
+            if not (MIN_HOURS_BEFORE <= cached_hours <= MAX_HOURS_BEFORE):
+                logger.debug(f"[DATARELEASE] SKIP {ticker} | cached {cached_hours:.0f}h out of window")
+                continue
+
         try:
             detail = client.get_market(ticker)
             md     = detail.get("market", detail)
