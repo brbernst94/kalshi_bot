@@ -232,7 +232,9 @@ def scan(client, risk_manager, markets: List[Dict]) -> List[Dict]:
                     days = (dt - datetime.now(timezone.utc)).total_seconds() / 86400
                 except Exception:
                     days = None
-        if days is None or days > MAX_DAYS_OUT or days < 0:
+        # Allow slightly negative days (ticker date is midnight UTC but market closes EOD)
+        # e.g. today at 20:00 UTC, "26MAR26" gives days=-0.87 but market is still live
+        if days is None or days > MAX_DAYS_OUT or days < -0.95:
             continue
 
         parsed = _parse_ticker(ticker)

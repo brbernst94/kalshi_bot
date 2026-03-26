@@ -53,7 +53,7 @@ MAX_POSITION_DAYS = 14   # Match data release window (336h = 14 days)
 # ── Strategy-specific ─────────────────────────────────────────────────────────
 
 # Bond: near-certain YES contracts
-BOND_MIN_PRICE_CENTS  = 55         # Buy YES ≥ 55¢ (lowered to find more candidates)
+BOND_MIN_PRICE_CENTS  = 40         # Buy YES ≥ 40¢ (lowered to find more candidates)
 BOND_MAX_DAYS         = 30         # Capped at global MAX_POSITION_DAYS
 BOND_MAX_POSITION_PCT = 0.25
 

@@ -17,6 +17,7 @@ import os
 import signal
 import sys
 import time
+import threading
 
 import schedule
 
@@ -114,6 +115,61 @@ def run_analysis():
     except Exception as e:
         logger.error(f"[ANALYST] Analysis failed: {e}", exc_info=True)
 
+def run_force_trade():
+    """Last resort: if nothing else traded, buy 1 contract of whatever we can find."""
+    # Only runs if zero positions after 10 minutes of bot running
+    if len(risk_manager.open_positions) > 0:
+        return  # Already have positions, don't need to force
+
+    logger.info("━━━ FORCE TRADE CYCLE ━━━")
+    try:
+        markets = get_cached_markets()
+        # Find ANY market with a valid price between 20-80 cents
+        candidates = []
+        SPORTS_SKIP = ("KXNFL", "KXNBA", "KXMLB", "KXNHL", "KXMVE", "KXWBC",
+                       "KXUFC", "KXPGA", "KXMLS", "KXNCAA", "KXWTA", "KXATP")
+        from client import price_cents as _pc
+        from bond import days_to_close
+        for m in markets:
+            ticker = m.get("ticker", "")
+            # Skip sports
+            if any(ticker.startswith(p) for p in SPORTS_SKIP):
+                continue
+            yes_price = _pc(m, "yes_ask") or _pc(m, "last_price") or _pc(m, "yes_bid")
+            if not yes_price or yes_price < 20 or yes_price > 80:
+                continue
+            days = days_to_close(m)
+            if days is None or days > 30 or days < 0.05:
+                continue
+            candidates.append((m.get("volume", 0) or 0, yes_price, ticker, m))
+
+        if not candidates:
+            logger.warning("[FORCE] No suitable markets found at all — check cache/API")
+            return
+
+        # Sort by volume descending, pick top candidate
+        candidates.sort(reverse=True)
+        _, yes_price, ticker, m = candidates[0]
+
+        side = "yes" if yes_price >= 50 else "no"
+        price = yes_price if side == "yes" else 100 - yes_price
+
+        logger.info(f"[FORCE] Placing test trade: {ticker} {side.upper()} @ {price}¢")
+
+        if not DRY_RUN:
+            try:
+                client.place_limit_order(
+                    ticker=ticker, side=side, action="buy",
+                    price_cents=price, count=1, post_only=False
+                )
+                risk_manager.record_open(ticker, 1, price, "force_trade", side=side)
+                logger.info(f"[FORCE] Trade placed successfully: {ticker}")
+            except Exception as e:
+                logger.error(f"[FORCE] Trade failed: {e}")
+    except Exception as e:
+        logger.error(f"[FORCE] Error: {e}")
+
+
 def shutdown(signum, frame):
     logger.info("Shutdown signal — final report:")
     print_dashboard(risk_manager, cycle)
@@ -175,6 +231,7 @@ def main():
     schedule.every(WEATHER_SCAN_MINS).minutes.do(run_weather)
     schedule.every(BOND_SCAN_MINS).minutes.do(run_bond)
     schedule.every(MONITOR_SCAN_MINS).minutes.do(run_monitor)
+    schedule.every(15).minutes.do(run_force_trade)
     schedule.every(4).hours.do(run_cleanup)
     schedule.every().day.at("00:15").do(run_analysis)
     schedule.every().day.at("23:55").do(monthly_summary)
@@ -184,6 +241,9 @@ def main():
     run_weather()
     run_bond()
     run_monitor()
+
+    # Force trade fallback — runs 2 minutes after startup if nothing else traded
+    threading.Timer(120, run_force_trade).start()
 
     logger.info("⏱  Main loop active.")
     while True:
