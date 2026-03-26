@@ -24,7 +24,7 @@ import schedule
 from logger    import setup_logging
 from client    import KalshiClient
 from risk      import RiskManager
-from monitor   import check_positions, cleanup_long_dated_positions
+from monitor   import check_positions, cleanup_long_dated_positions, liquidate_all_positions
 from dashboard import print_dashboard, monthly_summary
 from analyst   import run_daily_analysis
 import whale as whale_strat
@@ -99,8 +99,16 @@ def run_monitor():
     check_positions(client, risk_manager)
     print_dashboard(risk_manager, cycle)
 
+def run_liquidate_all():
+    """One-time full liquidation at startup — sell every open position, start fresh."""
+    if DRY_RUN:
+        logger.info("[LIQUIDATE] DRY-RUN — skipping full liquidation")
+        return
+    logger.info("━━━ FULL LIQUIDATION ━━━")
+    liquidate_all_positions(client, risk_manager)
+
 def run_cleanup():
-    """Exit all portfolio positions resolving beyond MAX_POSITION_DAYS (30 days).
+    """Exit all portfolio positions resolving beyond MAX_POSITION_DAYS.
     Passes the market cache so cleanup uses real resolution dates, not the
     per-session trading-window close_time that Kalshi puts on position objects."""
     if DRY_RUN:
@@ -192,7 +200,7 @@ def main():
     schedule.every().day.at("23:55").do(monthly_summary)
 
     logger.info("Running initial scan on startup...")
-    run_cleanup()
+    run_liquidate_all()   # sell everything — start fresh
     run_whale()
     run_momentum()
     run_datarelease()

@@ -150,6 +150,79 @@ def check_positions(client, risk_manager) -> int:
     return closed
 
 
+def liquidate_all_positions(client, risk_manager) -> int:
+    """
+    Sell every open portfolio position unconditionally — clean-slate reset.
+    Called once at startup when a fresh start is needed.
+    Uses mid price - 2¢ to get fills quickly while staying maker.
+    """
+    from client import price_cents as _pc
+
+    exited = 0
+
+    try:
+        all_positions = client.get_positions()
+    except Exception as e:
+        logger.error(f"[LIQUIDATE] Failed to fetch positions: {e}")
+        return 0
+
+    active = [p for p in all_positions
+              if int(p.get("net_position", p.get("position", 0)) or 0) != 0]
+
+    logger.info(f"[LIQUIDATE] ━━━ FULL LIQUIDATION ━━━ {len(active)} position(s) to sell")
+
+    for pos in active:
+        ticker = pos.get("ticker") or pos.get("market_ticker", "")
+        if not ticker:
+            continue
+
+        net  = int(pos.get("net_position", pos.get("position", 0)) or 0)
+        side = "yes" if net > 0 else "no"
+        qty  = abs(net)
+
+        try:
+            mid = client.get_mid_price_cents(ticker)
+        except Exception:
+            mid = None
+
+        if not mid:
+            mid = (_pc(pos, "yes_price") if side == "yes" else _pc(pos, "no_price")) or 50
+
+        exit_price = max(mid - 2, 1)
+
+        logger.info(f"[LIQUIDATE] SELL {ticker} | {side.upper()} x{qty} @ {exit_price}¢")
+
+        try:
+            client.place_limit_order(
+                ticker=ticker, side=side, action="sell",
+                price_cents=exit_price, count=qty,
+            )
+
+            if ticker in risk_manager.open_positions:
+                pnl = risk_manager.record_close(ticker, exit_price)
+            else:
+                avg_cents = _pc(pos, "average_price") or mid
+                pnl = (exit_price - avg_cents) * qty / 100
+
+            risk_manager.log_trade(
+                strategy="liquidate", ticker=ticker, side=side, action="sell",
+                price_cents=exit_price, count=qty, expected_pnl=pnl,
+                status="CLOSE", notes="FULL_LIQUIDATION"
+            )
+            exited += 1
+            logger.info(
+                f"[LIQUIDATE] ✅ {ticker} | {side.upper()} x{qty} @ {exit_price}¢ "
+                f"| est. pnl=${pnl:+.2f}"
+            )
+            time.sleep(0.4)
+
+        except Exception as e:
+            logger.error(f"[LIQUIDATE] Order failed {ticker}: {e}")
+
+    logger.info(f"[LIQUIDATE] Done — {exited}/{len(active)} positions sold. Starting fresh.")
+    return exited
+
+
 def cleanup_long_dated_positions(client, risk_manager,
                                   markets: Optional[List[Dict]] = None) -> int:
     """
