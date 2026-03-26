@@ -241,7 +241,17 @@ class KalshiClient:
 
     def get_positions(self) -> List[Dict]:
         data = self._get("/portfolio/positions")
-        return data.get("market_positions", [])
+        # Kalshi has used multiple key names across API versions — try all of them
+        for key in ("market_positions", "positions", "portfolio_positions"):
+            result = data.get(key)
+            if result is not None:
+                logger.debug(f"[CLIENT] get_positions: found {len(result)} positions under '{key}'")
+                return result
+        # Last resort: if data itself is a list
+        if isinstance(data, list):
+            return data
+        logger.warning(f"[CLIENT] get_positions: unknown response shape — keys: {list(data.keys())}")
+        return []
 
     def get_open_orders(self, ticker: Optional[str] = None) -> List[Dict]:
         params = {"status": "resting"}
