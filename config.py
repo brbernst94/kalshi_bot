@@ -88,14 +88,16 @@ FADE_MAX_POS_PCT         = 0.22
 # Only the two strategies with proven edge (24.7x and 18.2x profit factor).
 # Momentum (1.1x), Mentions (1.6x), and Whale (unproven) are disabled.
 STRATEGY_ALLOCATION = {
-    "datarelease": 0.50,
-    "weather":     0.50,
+    "datarelease": 0.40,
+    "weather":     0.30,
+    "bond":        0.30,
 }
 
 # ── Scheduling ────────────────────────────────────────────────────────────────
 MONITOR_SCAN_MINS     = 3
 DATARELEASE_SCAN_MINS = 5
 WEATHER_SCAN_MINS     = 10
+BOND_SCAN_MINS        = 5
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_LEVEL      = "DEBUG"

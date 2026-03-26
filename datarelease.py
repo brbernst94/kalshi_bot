@@ -259,6 +259,9 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
         balance = client.get_balance()
     except Exception:
         balance = STARTING_BANKROLL_USD
+    if balance < 1.0:
+        logger.warning(f"[DATARELEASE] balance=${balance:.2f} unexpectedly low — using STARTING_BANKROLL_USD=${STARTING_BANKROLL_USD:.2f}")
+        balance = STARTING_BANKROLL_USD
 
     strat_budget = balance * STRATEGY_ALLOCATION.get("datarelease", 0.15)
 
@@ -267,7 +270,7 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
         count     = client.contracts_for_budget(per_trade, c["our_price"])
         cost      = client.cost_usd(count, c["our_price"])
 
-        if cost < 1.0:
+        if cost < 0.01:
             continue
 
         if not risk_manager.approve("datarelease", c["ticker"], cost, c["ev"],

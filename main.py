@@ -28,8 +28,9 @@ from dashboard import print_dashboard, monthly_summary
 from analyst   import run_daily_analysis
 import datarelease as datarelease_strat
 import weather as weather_strat
+import bond as bond_strat
 from config import (
-    MONITOR_SCAN_MINS, DATARELEASE_SCAN_MINS, WEATHER_SCAN_MINS,
+    MONITOR_SCAN_MINS, DATARELEASE_SCAN_MINS, WEATHER_SCAN_MINS, BOND_SCAN_MINS,
 )
 
 setup_logging()
@@ -68,6 +69,12 @@ def run_weather():
     markets = get_cached_markets()
     c = weather_strat.scan(client, risk_manager, markets)
     if not DRY_RUN: weather_strat.execute(client, risk_manager, c)
+
+def run_bond():
+    logger.info("━━━ BOND CYCLE ━━━")
+    markets = get_cached_markets()
+    c = bond_strat.scan(client, risk_manager, markets)
+    if not DRY_RUN: bond_strat.execute(client, risk_manager, c)
 
 def run_monitor():
     global cycle
@@ -152,6 +159,13 @@ def main():
                 "Check KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY in your .env"
             )
             sys.exit(1)
+        # Log raw balance API response for diagnostics
+        try:
+            raw = client._get("/portfolio/balance")
+            logger.info(f"[STARTUP] Balance API response keys: {list(raw.keys())}")
+            logger.info(f"[STARTUP] Balance API response: {raw}")
+        except Exception as e:
+            logger.warning(f"[STARTUP] Balance diagnostic failed: {e}")
 
     signal.signal(signal.SIGINT,  shutdown)
     signal.signal(signal.SIGTERM, shutdown)
@@ -159,6 +173,7 @@ def main():
     # ── Schedules ─────────────────────────────────────────────────────────────
     schedule.every(DATARELEASE_SCAN_MINS).minutes.do(run_datarelease)
     schedule.every(WEATHER_SCAN_MINS).minutes.do(run_weather)
+    schedule.every(BOND_SCAN_MINS).minutes.do(run_bond)
     schedule.every(MONITOR_SCAN_MINS).minutes.do(run_monitor)
     schedule.every(4).hours.do(run_cleanup)
     schedule.every().day.at("00:15").do(run_analysis)
@@ -167,6 +182,7 @@ def main():
     logger.info("Running initial scan on startup...")
     run_datarelease()
     run_weather()
+    run_bond()
     run_monitor()
 
     logger.info("⏱  Main loop active.")

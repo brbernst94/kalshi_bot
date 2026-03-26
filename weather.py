@@ -31,7 +31,7 @@ from typing import Dict, List, Optional, Tuple
 
 from bond import days_to_close
 from client import price_cents as _pc
-from config import STRATEGY_ALLOCATION, MAX_POSITION_DAYS
+from config import STRATEGY_ALLOCATION, MAX_POSITION_DAYS, STARTING_BANKROLL_USD
 
 logger = logging.getLogger(__name__)
 
@@ -334,13 +334,15 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
     try:
         balance = client.get_balance()
     except Exception:
-        from config import STARTING_BANKROLL_USD
+        balance = STARTING_BANKROLL_USD
+    if balance < 1.0:
+        logger.warning(f"[WEATHER] balance=${balance:.2f} unexpectedly low — using STARTING_BANKROLL_USD=${STARTING_BANKROLL_USD:.2f}")
         balance = STARTING_BANKROLL_USD
 
     budget = balance * STRATEGY_ALLOCATION.get("weather", 0.10)
 
     for c in candidates:
-        if budget <= 1.0:
+        if budget <= 0.01:
             break
 
         cost_per = c["entry_cents"] / 100
@@ -349,6 +351,8 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
             continue
 
         cost = count * cost_per
+        if cost < 0.01:
+            continue
         if not risk_manager.approve("weather", c["ticker"], cost,
                                      c["ev"], notes=c["title"][:45]):
             continue
