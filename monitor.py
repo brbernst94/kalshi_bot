@@ -153,8 +153,9 @@ def check_positions(client, risk_manager) -> int:
 def liquidate_all_positions(client, risk_manager) -> int:
     """
     Sell every open portfolio position unconditionally — clean-slate reset.
-    Called once at startup when a fresh start is needed.
-    Uses mid price - 2¢ to get fills quickly while staying maker.
+    Uses post_only=False (taker) so orders cross the book and fill immediately.
+    Prices at best bid so the order executes at the best available price.
+    Falls back to 1¢ if no bid exists (accepts any price to guarantee exit).
     """
     from client import price_cents as _pc
 
@@ -180,28 +181,33 @@ def liquidate_all_positions(client, risk_manager) -> int:
         side = "yes" if net > 0 else "no"
         qty  = abs(net)
 
+        # Get best bid so we can cross it immediately (taker fill)
         try:
-            mid = client.get_mid_price_cents(ticker)
+            best_bid, best_ask = client.get_best_bid_ask(ticker)
+            if side == "yes":
+                exit_price = best_bid if best_bid else 1
+            else:
+                # NO side: bid for NO contracts = 100 - yes_ask
+                exit_price = (100 - best_ask) if best_ask else 1
         except Exception:
-            mid = None
+            exit_price = 1
 
-        if not mid:
-            mid = (_pc(pos, "yes_price") if side == "yes" else _pc(pos, "no_price")) or 50
+        exit_price = max(exit_price, 1)
 
-        exit_price = max(mid - 2, 1)
-
-        logger.info(f"[LIQUIDATE] SELL {ticker} | {side.upper()} x{qty} @ {exit_price}¢")
+        logger.info(f"[LIQUIDATE] SELL {ticker} | {side.upper()} x{qty} @ {exit_price}¢ (taker)")
 
         try:
+            # post_only=False → taker order, crosses book immediately
             client.place_limit_order(
                 ticker=ticker, side=side, action="sell",
                 price_cents=exit_price, count=qty,
+                post_only=False,
             )
 
             if ticker in risk_manager.open_positions:
                 pnl = risk_manager.record_close(ticker, exit_price)
             else:
-                avg_cents = _pc(pos, "average_price") or mid
+                avg_cents = _pc(pos, "average_price") or exit_price
                 pnl = (exit_price - avg_cents) * qty / 100
 
             risk_manager.log_trade(
