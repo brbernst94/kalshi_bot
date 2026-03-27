@@ -22,7 +22,7 @@ from typing import Dict, List, Optional
 
 from config import (
     BOND_MAX_DAYS, BOND_MAX_POSITION_PCT, BOND_MIN_PRICE_CENTS,
-    KALSHI_TAKER_FEE_PCT, STRATEGY_ALLOCATION,
+    KALSHI_TAKER_FEE_PCT, STRATEGY_ALLOCATION, STARTING_BANKROLL_USD,
 )
 from client import price_cents as _pc
 
@@ -30,7 +30,11 @@ logger = logging.getLogger(__name__)
 
 
 def days_to_close(market: Dict) -> Optional[float]:
-    for field in ("close_time", "expiration_time", "end_date"):
+    for field in (
+        "close_time", "expiration_time", "end_date",
+        "expected_expiration_time", "settlement_time", "resolution_time",
+        "close_date", "expiry", "expiry_time",
+    ):
         val = market.get(field)
         if val:
             try:
@@ -38,9 +42,12 @@ def days_to_close(market: Dict) -> Optional[float]:
                 if dt.tzinfo is None:
                     dt = dt.replace(tzinfo=timezone.utc)
                 diff = (dt - datetime.now(timezone.utc)).total_seconds() / 86400
-                return diff if diff > 0 else None
+                if diff > 0:
+                    return diff
+                # diff <= 0 means this timestamp is in the past — try next field
+                # (e.g. close_time = trading window end, expiration_time = actual resolve)
             except Exception:
-                continue
+                pass
     return None
 
 
@@ -100,7 +107,24 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
     logger.info(f"[BOND] {len(time_filtered)} markets within {BOND_MAX_DAYS}-day window with price data")
 
     if not time_filtered:
-        logger.info("[BOND] 0 candidates")
+        # Detailed diagnostics: sample a few markets to show why they were filtered out
+        sample_no_time  = [m.get("ticker", "?") for m in open_markets[:5]
+                           if days_to_close(m) is None]
+        sample_no_price = [m.get("ticker", "?") for m in open_markets[:20]
+                           if days_to_close(m) is not None
+                           and not (_pc(m, "yes_ask") or _pc(m, "last_price") or _pc(m, "yes_bid"))]
+        sample_time_range = []
+        for m in open_markets[:20]:
+            d = days_to_close(m)
+            if d is not None and not (0.1 <= d <= BOND_MAX_DAYS):
+                sample_time_range.append(f"{m.get('ticker','?')}({d:.1f}d)")
+        logger.info(
+            f"[BOND] 0 candidates after time+price filter | "
+            f"open_markets={len(open_markets)} | "
+            f"sample_no_close_time={sample_no_time[:3]} | "
+            f"sample_outside_window={sample_time_range[:3]} | "
+            f"sample_no_price={sample_no_price[:3]}"
+        )
         return []
 
     # Pass 2: use last_price from cache — no individual API calls needed
@@ -165,21 +189,23 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
     try:
         balance = client.get_balance()
     except Exception:
-        from config import STARTING_BANKROLL_USD
+        balance = STARTING_BANKROLL_USD
+    if balance < 1.0:
+        logger.warning(f"[BOND] balance=${balance:.2f} unexpectedly low — using STARTING_BANKROLL_USD=${STARTING_BANKROLL_USD:.2f}")
         balance = STARTING_BANKROLL_USD
 
-    strat_budget = balance * STRATEGY_ALLOCATION["bond"]
+    strat_budget = balance * STRATEGY_ALLOCATION.get("bond", 0.30)
 
     for c in candidates[:3]:
-        # Use post_only to get maker fill (avoid 1% taker fee)
-        bid_price = max(c["yes_price"] - 1, 1)   # 1¢ below ask for maker fill
+        # Use taker order (post_only=False) for immediate fills
+        bid_price = c["yes_price"]   # hit the ask directly for guaranteed fill
         count     = client.contracts_for_budget(
                         min(strat_budget * 0.45, balance * BOND_MAX_POSITION_PCT),
                         bid_price
                     )
         cost      = client.cost_usd(count, bid_price)
 
-        if cost < 1.0:
+        if cost < 0.01:
             continue
 
         if not risk_manager.approve("bond", c["ticker"], cost, c["gross_return"],
@@ -193,7 +219,7 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
                 action="buy",
                 price_cents=bid_price,
                 count=count,
-                post_only=True,   # Maker = 0% fee
+                post_only=False,   # Taker order — immediate fill
             )
             risk_manager.record_open(c["ticker"], count, bid_price, "bond")
             risk_manager.log_trade(

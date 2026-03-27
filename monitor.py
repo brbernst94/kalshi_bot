@@ -167,17 +167,34 @@ def liquidate_all_positions(client, risk_manager) -> int:
         logger.error(f"[LIQUIDATE] Failed to fetch positions: {e}")
         return 0
 
-    active = [p for p in all_positions
-              if int(p.get("net_position", p.get("position", 0)) or 0) != 0]
+    # Log first position's keys so we can identify the correct field name
+    if all_positions:
+        logger.info(f"[LIQUIDATE] Sample position keys: {list(all_positions[0].keys())}")
+        logger.info(f"[LIQUIDATE] Sample position data: {all_positions[0]}")
 
-    logger.info(f"[LIQUIDATE] ━━━ FULL LIQUIDATION ━━━ {len(active)} position(s) to sell")
+    def _get_net(p: dict) -> int:
+        for field in ("net_position", "position", "position_fp", "quantity",
+                      "contracts", "net_contracts", "total_held", "holdings", "size"):
+            v = p.get(field)
+            if v is not None:
+                try:
+                    n = int(float(v))
+                    if n != 0:
+                        return n
+                except (TypeError, ValueError):
+                    continue
+        return 0
+
+    active = [p for p in all_positions if _get_net(p) != 0]
+
+    logger.info(f"[LIQUIDATE] ━━━ FULL LIQUIDATION ━━━ {len(active)}/{len(all_positions)} position(s) to sell")
 
     for pos in active:
         ticker = pos.get("ticker") or pos.get("market_ticker", "")
         if not ticker:
             continue
 
-        net  = int(pos.get("net_position", pos.get("position", 0)) or 0)
+        net  = _get_net(pos)
         side = "yes" if net > 0 else "no"
         qty  = abs(net)
 
@@ -274,7 +291,17 @@ def cleanup_long_dated_positions(client, risk_manager,
         if not ticker:
             continue
 
-        net = int(pos.get("net_position", pos.get("position", 0)) or 0)
+        net = 0
+        for field in ("net_position", "position", "position_fp", "quantity",
+                      "contracts", "net_contracts", "total_held", "holdings", "size"):
+            v = pos.get(field)
+            if v is not None:
+                try:
+                    net = int(float(v))
+                    if net != 0:
+                        break
+                except (TypeError, ValueError):
+                    continue
         if net == 0:
             continue
 

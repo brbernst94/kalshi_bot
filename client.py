@@ -211,8 +211,32 @@ class KalshiClient:
     def get_balance(self) -> float:
         """Returns total portfolio value: cash + value of open positions."""
         data = self._get("/portfolio/balance")
-        # balance field is in cents (integer) — not affected by fixed-point migration
-        cash = round(data.get("balance", 0) / 100, 2)
+
+        # Try _dollars fields first (March 2026 fixed-point migration)
+        cash = None
+        for field in ("balance_dollars", "available_balance_dollars", "cash_dollars",
+                      "total_balance_dollars", "portfolio_balance_dollars"):
+            v = data.get(field)
+            if v is not None:
+                try:
+                    cash = round(float(v), 2)
+                    break
+                except (TypeError, ValueError):
+                    pass
+        # Fall back to legacy integer cents fields
+        if cash is None:
+            for field in ("balance", "available_balance", "cash", "total_balance"):
+                v = data.get(field)
+                if v is not None:
+                    try:
+                        cash = round(int(float(v)) / 100, 2)
+                        break
+                    except (TypeError, ValueError):
+                        pass
+        if cash is None:
+            cash = 0.0
+            logger.warning(f"[CLIENT] get_balance: unrecognised balance field — keys={list(data.keys())}")
+        logger.debug(f"[CLIENT] Cash balance: ${cash:.2f} | raw keys: {list(data.keys())}")
 
         try:
             pos_data = self._get("/portfolio/positions")
@@ -237,11 +261,38 @@ class KalshiClient:
     def get_cash(self) -> float:
         """Returns spendable cash only (excludes value locked in positions)."""
         data = self._get("/portfolio/balance")
-        return round(data.get("balance", 0) / 100, 2)
+        # Try _dollars fields first (March 2026 fixed-point migration)
+        for field in ("balance_dollars", "available_balance_dollars", "cash_dollars",
+                      "total_balance_dollars", "portfolio_balance_dollars"):
+            v = data.get(field)
+            if v is not None:
+                try:
+                    return round(float(v), 2)
+                except (TypeError, ValueError):
+                    pass
+        # Fall back to legacy integer cents
+        for field in ("balance", "available_balance", "cash", "total_balance"):
+            v = data.get(field)
+            if v is not None:
+                try:
+                    return round(int(float(v)) / 100, 2)
+                except (TypeError, ValueError):
+                    pass
+        return 0.0
 
     def get_positions(self) -> List[Dict]:
         data = self._get("/portfolio/positions")
-        return data.get("market_positions", [])
+        # Kalshi has used multiple key names across API versions — try all of them
+        for key in ("market_positions", "positions", "portfolio_positions"):
+            result = data.get(key)
+            if result is not None:
+                logger.debug(f"[CLIENT] get_positions: found {len(result)} positions under '{key}'")
+                return result
+        # Last resort: if data itself is a list
+        if isinstance(data, list):
+            return data
+        logger.warning(f"[CLIENT] get_positions: unknown response shape — keys: {list(data.keys())}")
+        return []
 
     def get_open_orders(self, ticker: Optional[str] = None) -> List[Dict]:
         params = {"status": "resting"}
@@ -253,12 +304,15 @@ class KalshiClient:
     # ── Markets ───────────────────────────────────────────────────────────────
 
     def get_markets(self, limit: int = 200, cursor: Optional[str] = None,
-                    status: str = "open", event_ticker: Optional[str] = None) -> Dict:
+                    status: str = "open", event_ticker: Optional[str] = None,
+                    series_ticker: Optional[str] = None) -> Dict:
         params = {"limit": limit, "status": status}
         if cursor:
             params["cursor"] = cursor
         if event_ticker:
             params["event_ticker"] = event_ticker
+        if series_ticker:
+            params["series_ticker"] = series_ticker
         return self._get("/markets", params=params)
 
     def get_events(self, limit: int = 200, cursor: Optional[str] = None,
@@ -325,14 +379,31 @@ class KalshiClient:
         good_events = nonsports_events + sports_events  # non-sports prioritised
         logger.info(f"[CLIENT] {len(nonsports_events)} non-sports + {len(sports_events)} sports events | {kxmve_skipped} KXMVE skipped | {len(markets_by_ticker)} embedded markets")
 
-        # Step 3: Fetch per-event — always prioritise non-sports events
-        # This ensures bond/longshot/fade see financial/political markets even during March Madness
-        if not markets_by_ticker and good_events:
-            # Non-sports: take up to 200 sorted by volume
-            nonsports_events.sort(key=lambda e: int(e.get("volume", 0) or 0), reverse=True)
-            sports_events.sort(key=lambda e: int(e.get("volume", 0) or 0), reverse=True)
-            fetch_events = nonsports_events[:200] + sports_events[:100]
-            logger.info(f"[CLIENT] Fetching per event: {len(nonsports_events[:200])} non-sports + {len(sports_events[:100])} sports")
+        # Step 3: Fetch per-event to get FULL market data (price fields, close_time, etc).
+        # The events listing API returns embedded market stubs with NO price data — we
+        # must call GET /markets?event_ticker=X for each event to get yes_ask, last_price etc.
+        # IMPORTANT: always run this step regardless of embedded stubs already collected.
+        # Fix: always fetch strategy-critical event prefixes first, then fill with others.
+        PRIORITY_EVENT_PREFIXES = (
+            "KXHIGH", "KXLOW", "KXPRECIP",              # Weather
+            "KXCPI", "KXFED", "KXFEDDECISION", "KXPCE", # Data release
+            "KXNFP", "KXGDPUS", "KXGDPQ", "KXUNRATE", "KXFOMC",  # US GDP only (not KXGDPNOM/KXGDPYEAR)
+            "KXJOBLESS", "KXPPI", "KXISM", "KXRETAIL",
+        )
+        if good_events:
+            priority_events = [e for e in nonsports_events
+                               if e.get("event_ticker", e.get("ticker", ""))
+                               .startswith(PRIORITY_EVENT_PREFIXES)]
+            other_events    = [e for e in nonsports_events
+                               if e not in priority_events]
+            # Always get all priority events + fill remainder up to 200
+            fetch_nonsports = priority_events + other_events[:max(0, 200 - len(priority_events))]
+            fetch_events    = fetch_nonsports + sports_events[:50]
+            logger.info(
+                f"[CLIENT] Fetching per event: {len(priority_events)} priority + "
+                f"{len(fetch_nonsports)-len(priority_events)} other non-sports + "
+                f"{len(sports_events[:50])} sports"
+            )
             for event in fetch_events:
                 eticker = event.get("event_ticker", event.get("ticker", ""))
                 try:

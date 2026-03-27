@@ -31,12 +31,12 @@ from typing import Dict, List, Optional, Tuple
 
 from bond import days_to_close
 from client import price_cents as _pc
-from config import STRATEGY_ALLOCATION, MAX_POSITION_DAYS
+from config import STRATEGY_ALLOCATION, MAX_POSITION_DAYS, STARTING_BANKROLL_USD
 
 logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-MIN_EDGE_CENTS   = 8    # Minimum divergence from NWS forecast to enter
+MIN_EDGE_CENTS   = 3    # Minimum divergence from NWS forecast to enter (lowered from 8)
 MAX_CONTRACTS    = 40   # Per trade cap
 MAX_DAYS_OUT     = 2    # Only trade today/tomorrow weather markets
 MIN_PRICE_CENTS  = 5    # Don't buy < 5¢ (too much slippage risk)
@@ -119,7 +119,12 @@ def _fetch_nws_forecast(city_code: str) -> Optional[Dict]:
     Fetch today's high/low forecast from NWS for a given city code.
     Returns dict with 'high' and 'low' keys (°F), or None on failure.
     """
-    gridpoint = NWS_GRIDPOINTS.get(city_code.upper())
+    code = city_code.upper()
+    gridpoint = NWS_GRIDPOINTS.get(code)
+    # Kalshi sometimes uses a T-prefix before the city code (e.g. TBOS for Boston).
+    # If not found directly, try stripping a leading T from 4-letter codes.
+    if not gridpoint and len(code) == 4 and code[0] == "T":
+        gridpoint = NWS_GRIDPOINTS.get(code[1:])
     if not gridpoint:
         logger.debug(f"[WEATHER] No NWS gridpoint for city: {city_code}")
         return None
@@ -216,9 +221,20 @@ def scan(client, risk_manager, markets: List[Dict]) -> List[Dict]:
     for m in weather_markets:
         ticker = m.get("ticker", "")
 
-        # Days check
+        # Days check — prefer cached close_time, fall back to date in ticker
         days = days_to_close(m)
-        if days is None or days > MAX_DAYS_OUT or days < 0:
+        if days is None:
+            # Parse date from ticker: KXHIGHTBOS-26MAR26-T56 → "26MAR26"
+            pm = re.search(r'-(\d{2}[A-Z]{3}\d{2})-', ticker.upper())
+            if pm:
+                try:
+                    dt = datetime.strptime(pm.group(1), "%d%b%y").replace(tzinfo=timezone.utc)
+                    days = (dt - datetime.now(timezone.utc)).total_seconds() / 86400
+                except Exception:
+                    days = None
+        # Allow slightly negative days (ticker date is midnight UTC but market closes EOD)
+        # e.g. today at 20:00 UTC, "26MAR26" gives days=-0.87 but market is still live
+        if days is None or days > MAX_DAYS_OUT or days < -0.95:
             continue
 
         parsed = _parse_ticker(ticker)
@@ -320,13 +336,15 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
     try:
         balance = client.get_balance()
     except Exception:
-        from config import STARTING_BANKROLL_USD
+        balance = STARTING_BANKROLL_USD
+    if balance < 1.0:
+        logger.warning(f"[WEATHER] balance=${balance:.2f} unexpectedly low — using STARTING_BANKROLL_USD=${STARTING_BANKROLL_USD:.2f}")
         balance = STARTING_BANKROLL_USD
 
     budget = balance * STRATEGY_ALLOCATION.get("weather", 0.10)
 
     for c in candidates:
-        if budget <= 1.0:
+        if budget <= 0.01:
             break
 
         cost_per = c["entry_cents"] / 100
@@ -335,6 +353,8 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
             continue
 
         cost = count * cost_per
+        if cost < 0.01:
+            continue
         if not risk_manager.approve("weather", c["ticker"], cost,
                                      c["ev"], notes=c["title"][:45]):
             continue
@@ -346,6 +366,7 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
                 action="buy",
                 price_cents=c["entry_cents"],
                 count=count,
+                post_only=False,  # taker — guarantee immediate fill
             )
             risk_manager.record_open(c["ticker"], count, c["entry_cents"],
                                      "weather", side=c["side"])

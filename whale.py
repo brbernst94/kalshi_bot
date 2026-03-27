@@ -260,7 +260,20 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
 
     strat_budget = balance * STRATEGY_ALLOCATION["whale"]
 
+    # Fresh position sync before the loop — prevents placing opposing orders on
+    # markets we already hold (YES + NO on same ticker = guaranteed fee loss).
+    risk_manager.sync_positions_from_api()
+
     for c in candidates[:4]:
+        # Hard guard: skip if we hold any position on this ticker (any side)
+        if c["ticker"] in risk_manager.open_positions:
+            held = risk_manager.open_positions[c["ticker"]]
+            logger.info(
+                f"[WHALE] Skip {c['ticker']} — already hold "
+                f"{held.get('side','?').upper()} {held.get('count','?')}x "
+                f"(would create competing position)"
+            )
+            continue
         # Size at 7% of live balance per trade — scales automatically as balance grows
         # No hard dollar cap; balance is fetched live so this self-adjusts
         max_per_trade = balance * 0.07
