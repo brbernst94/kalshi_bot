@@ -124,13 +124,8 @@ def fetch_large_fills(client) -> List[Dict]:
             sports_skipped += 1
             continue
 
-        # Skip sports unless it's a tracked whale
-        if ticker.startswith(SPORTS_PREFIXES) and not is_tracked:
-            sports_skipped += 1
-            continue
-
-        # Accept everything else — don't over-restrict to allowlist
-        # (financial, crypto, political, policy markets all have edge)
+        # Accept everything — sports included
+        # (user wants all large fills copied regardless of category)
 
         price = _pc(t, "yes_price") or _pc(t, "no_price") or 50
         side  = t.get("taker_side", "yes")
@@ -265,7 +260,20 @@ def execute(client, risk_manager, candidates: List[Dict]) -> int:
 
     strat_budget = balance * STRATEGY_ALLOCATION["whale"]
 
+    # Fresh position sync before the loop — prevents placing opposing orders on
+    # markets we already hold (YES + NO on same ticker = guaranteed fee loss).
+    risk_manager.sync_positions_from_api()
+
     for c in candidates[:4]:
+        # Hard guard: skip if we hold any position on this ticker (any side)
+        if c["ticker"] in risk_manager.open_positions:
+            held = risk_manager.open_positions[c["ticker"]]
+            logger.info(
+                f"[WHALE] Skip {c['ticker']} — already hold "
+                f"{held.get('side','?').upper()} {held.get('count','?')}x "
+                f"(would create competing position)"
+            )
+            continue
         # Size at 7% of live balance per trade — scales automatically as balance grows
         # No hard dollar cap; balance is fetched live so this self-adjusts
         max_per_trade = balance * 0.07
