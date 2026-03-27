@@ -124,13 +124,8 @@ def fetch_large_fills(client) -> List[Dict]:
             sports_skipped += 1
             continue
 
-        # Skip sports unless it's a tracked whale
-        if ticker.startswith(SPORTS_PREFIXES) and not is_tracked:
-            sports_skipped += 1
-            continue
-
-        # Accept everything else — don't over-restrict to allowlist
-        # (financial, crypto, political, policy markets all have edge)
+        # Accept everything — sports included
+        # (user wants all large fills copied regardless of category)
 
         price = _pc(t, "yes_price") or _pc(t, "no_price") or 50
         side  = t.get("taker_side", "yes")
