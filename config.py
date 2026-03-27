@@ -48,7 +48,7 @@ MIN_NET_EDGE             = 0.02   # 2% net edge minimum
 # No strategy may open a position in a market resolving more than 3 days out.
 # Monitor's cleanup sweep will also exit any existing portfolio positions
 # (including manually placed ones) beyond this horizon automatically.
-MAX_POSITION_DAYS = 30
+MAX_POSITION_DAYS = 7
 
 # ── Strategy-specific ─────────────────────────────────────────────────────────
 
