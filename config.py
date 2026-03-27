@@ -37,7 +37,7 @@ KALSHI_MAKER_FEE_PCT   = 0.0       # Maker orders (limit) currently 0% fee
 CONTRACT_VALUE_USD     = 1.00      # Each contract pays $1.00 at resolution
 
 # ── Capital & Risk ─────────────────────────────────────────────────────────────
-STARTING_BANKROLL_USD    = 170.00
+STARTING_BANKROLL_USD    = 1728.00
 MAX_SINGLE_POSITION_PCT  = 0.20    # Max 20% per position
 MAX_DAILY_LOSS_PCT       = 0.20    # Hard stop if down 20% in a day
 MAX_OPEN_POSITIONS       = 20      # Allow up to 20 simultaneous positions
@@ -92,11 +92,7 @@ FADE_MAX_POS_PCT         = 0.22
 # mentions: +$4.50 avg, proven edge on presidential/political mention markets
 # whale: reduced — now allowlist-only, lower vol expected
 STRATEGY_ALLOCATION = {
-    "datarelease": 0.70,
-    "momentum":    0.10,
-    "weather":     0.10,
-    "whale":       0.05,
-    "mentions":    0.05,
+    "whale": 1.0,
 }
 
 # ── Scheduling ────────────────────────────────────────────────────────────────

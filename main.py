@@ -189,23 +189,13 @@ def main():
 
     # ── Schedules ─────────────────────────────────────────────────────────────
     schedule.every(WHALE_SCAN_MINS).minutes.do(run_whale)
-    schedule.every(MOMENTUM_SCAN_MINS).minutes.do(run_momentum)
-    schedule.every(DATARELEASE_SCAN_MINS).minutes.do(run_datarelease)
-    schedule.every(WEATHER_SCAN_MINS).minutes.do(run_weather)
-    schedule.every(MENTIONS_SCAN_MINS).minutes.do(run_mentions)
     schedule.every(MONITOR_SCAN_MINS).minutes.do(run_monitor)
     schedule.every(4).hours.do(run_cleanup)
-
     schedule.every().day.at("00:15").do(run_analysis)
     schedule.every().day.at("23:55").do(monthly_summary)
 
     logger.info("Running initial scan on startup...")
-    run_liquidate_all()   # sell everything — start fresh
     run_whale()
-    run_momentum()
-    run_datarelease()
-    run_weather()
-    run_mentions()
     run_monitor()
 
     logger.info("⏱  Main loop active. Daily analysis scheduled for 00:15 UTC.")
