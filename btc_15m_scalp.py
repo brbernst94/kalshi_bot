@@ -81,7 +81,14 @@ def _sleep_until(target: datetime) -> None:
 
 # ── Market discovery ──────────────────────────────────────────────────────────
 
+_MONTH_MAP = {
+    "jan":1,"feb":2,"mar":3,"apr":4,"may":5,"jun":6,
+    "jul":7,"aug":8,"sep":9,"oct":10,"nov":11,"dec":12,
+}
+
 def _parse_close_time(m: dict) -> Optional[datetime]:
+    """Parse close time from market dict fields, then fall back to ticker name."""
+    # Try standard API fields first
     for field in ("close_time", "expiration_time", "close_date"):
         s = m.get(field)
         if s:
@@ -89,63 +96,74 @@ def _parse_close_time(m: dict) -> Optional[datetime]:
                 return datetime.fromisoformat(s.replace("Z", "+00:00"))
             except (ValueError, AttributeError):
                 pass
+
+    # Fall back: parse from ticker name.
+    # Confirmed formats:
+    #   KXBTC15M-26MAR30T0545   → 2026-03-30 05:45 UTC
+    #   KXBTC15M-26MAR30-T0545  → 2026-03-30 05:45 UTC
+    #   KXBTC15M-26jan060745    → 2026-01-06 07:45 UTC
+    import re
+    ticker = m.get("ticker", "")
+    suffix = re.sub(r"^KXBTC15M-?", "", ticker, flags=re.IGNORECASE)
+    pat = re.match(r"(\d{2})([A-Za-z]{3})(\d{2})(?:-T|-|T)?(\d{4})", suffix)
+    if pat:
+        yy, mon, dd, hhmm = pat.groups()
+        month = _MONTH_MAP.get(mon.lower())
+        if month:
+            try:
+                return datetime(2000+int(yy), month, int(dd),
+                                int(hhmm[:2]), int(hhmm[2:]),
+                                tzinfo=timezone.utc)
+            except ValueError:
+                pass
     return None
 
 
 def find_btc15m_market(client: KalshiClient) -> Optional[Tuple[str, datetime]]:
     """
-    Find the active BTC 15-min market with the nearest future close.
-
-    Strategy: scan all open markets for any BTC market closing within
-    the next 20 minutes. This catches the real ticker format whatever
-    Kalshi decides to call it.
+    Find the active BTC 15-min market closing soonest in the next 20 minutes.
+    Uses series_ticker=KXBTC15M (confirmed correct API param).
+    Close time is parsed from the API response or inferred from the ticker name.
     """
     now        = datetime.now(timezone.utc)
     horizon    = now + timedelta(minutes=20)
 
     best_ticker = None
     best_close: Optional[datetime] = None
-    btc_seen   = []   # for debug logging
+    btc_seen   = []
 
     def _consider(m: dict):
         nonlocal best_ticker, best_close
         ticker = m.get("ticker", "")
-        title  = (m.get("title") or m.get("subtitle") or "").lower()
-
-        # Must mention BTC/bitcoin somewhere
-        is_btc = (
-            "btc"     in ticker.upper() or
-            "bitcoin" in title
-        )
-        if not is_btc:
+        if not ticker.upper().startswith("KXBTC15M"):
             return
 
         close_dt = _parse_close_time(m)
         if not close_dt:
+            logger.debug(f"[BTC15M] Could not parse close time for {ticker}")
             return
 
-        # Log every BTC market we see for debugging
-        if close_dt > now:
-            btc_seen.append((ticker, close_dt))
+        btc_seen.append((ticker, close_dt))
 
-        # Only care about markets closing in the next 20 minutes
         if close_dt <= now or close_dt > horizon:
             return
 
         if best_close is None or close_dt < best_close:
             best_ticker, best_close = ticker, close_dt
 
-    # Fast path: series_ticker=KXBTC15M (correct Kalshi API parameter)
+    # series_ticker=KXBTC15M — returns only BTC 15-min markets
     try:
         data = client.get_markets(limit=50, series_ticker="KXBTC15M", status="open")
-        for m in data.get("markets", []):
+        markets = data.get("markets", [])
+        logger.info(f"[BTC15M] series_ticker query returned {len(markets)} market(s)")
+        for m in markets:
             _consider(m)
         if best_ticker:
             return (best_ticker, best_close)
-    except Exception:
-        pass
+    except Exception as e:
+        logger.warning(f"[BTC15M] series_ticker query failed: {e}")
 
-    # Full paginated scan — look at all open markets
+    # Fallback: full paginated scan
     try:
         cursor = None
         for _ in range(10):
@@ -153,17 +171,14 @@ def find_btc15m_market(client: KalshiClient) -> Optional[Tuple[str, datetime]]:
             for m in data.get("markets", []):
                 _consider(m)
             cursor = data.get("cursor")
-            if not cursor:
-                break
-            if best_ticker:
+            if not cursor or best_ticker:
                 break
     except Exception as e:
-        logger.error(f"Market lookup failed: {e}")
+        logger.error(f"[BTC15M] Full scan failed: {e}")
 
-    # Always log nearby BTC markets so we can see the real ticker format
     if btc_seen:
         btc_seen.sort(key=lambda x: x[1])
-        logger.info(f"[BTC15M] BTC markets found (next 6h):")
+        logger.info(f"[BTC15M] KXBTC15M markets found:")
         for t, dt in btc_seen[:10]:
             logger.info(f"  {t}  closes {dt.strftime('%H:%M:%S')} UTC")
     else:
