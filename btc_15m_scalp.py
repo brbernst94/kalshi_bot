@@ -4,28 +4,34 @@ btc_15m_scalp.py — BTC 15-minute final-5-minute breakout scalper
 Run standalone:  python btc_15m_scalp.py
 Dry-run mode:    python btc_15m_scalp.py --dry-run
 
-Strategy:
-  • BTC 15-min markets (KXBTC15M-*) close at :00, :15, :30, :45 UTC every hour
-  • 5 minutes before each close, this script wakes up and polls the price at 5 Hz
-  • ENTRY: when YES or NO price crosses above 75¢ from below
-            - If price is already ≥ 75¢ when the window opens → no entry (must cross)
-  • STOP GAIN: exit at 95¢ — done for this window
-  • STOP LOSS: exit at 65¢ — 30s cooldown, then watch for another crossover
-  • At market close: hold any open position to resolution ($1/contract payout)
+SPEED:
+  Primary:   Kalshi WebSocket feed — price updates pushed in real-time
+             (<50ms latency, no polling overhead)
+  Fallback:  REST polling with NO sleep — limited only by HTTP round-trip
+             (~100-300ms / call, ~3-8 Hz)
 
-Tunable constants are at the top of this file.
+Strategy:
+  • BTC 15-min markets (KXBTC15M-*) close at :00, :15, :30, :45 UTC
+  • 5 minutes before each close: hot loop starts
+  • ENTRY: YES or NO crosses above 75¢ FROM BELOW (never fires if price opens ≥ 75¢)
+  • STOP GAIN: 95¢ — sell, window done
+  • STOP LOSS: 65¢ — sell, 30s cooldown, re-entry allowed
+  • WINDOW CLOSE with position: hold to resolution ($1/contract payout)
 """
 
 import argparse
+import asyncio
+import base64
+import json
 import logging
 import os
+import signal
 import sys
-import time
 import threading
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional, Tuple
 
-# ── Use the project's Kalshi client (handles RSA-PSS auth) ───────────────────
 from client import KalshiClient, price_cents as _pc
 from config import STARTING_BANKROLL_USD
 
@@ -34,35 +40,30 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s  %(levelname)-7s  %(message)s",
     datefmt="%H:%M:%S",
-    handlers=[
-        logging.StreamHandler(sys.stdout),
-    ],
+    handlers=[logging.StreamHandler(sys.stdout)],
 )
 logger = logging.getLogger("btc15m")
 
 # ── Tunable parameters ────────────────────────────────────────────────────────
-ENTRY_CENTS        = 75    # Enter when side crosses above this FROM BELOW
+ENTRY_CENTS        = 75    # Enter when side crosses ABOVE this FROM BELOW
 STOP_LOSS_CENTS    = 65    # Exit if position price drops to this
 STOP_GAIN_CENTS    = 95    # Take profit when position price reaches this
-POLL_INTERVAL_S    = 0.2   # 5 Hz price polling (stays within Kalshi rate limits)
 WINDOW_MINUTES     = 5     # Minutes before market close to start watching
 POSITION_PCT       = 0.07  # 7% of account balance per trade
-MIN_TRADE_USD      = 2.00  # Skip trades smaller than this
-REENTRY_COOLDOWN_S = 30    # Wait this long after a stop loss before re-entering
+MIN_TRADE_USD      = 2.00  # Skip if trade cost is below this
+REENTRY_COOLDOWN_S = 30    # Wait after stop loss before re-entry
+
+# REST fallback: no artificial sleep — purely HTTP-latency limited
+REST_POLL_SLEEP    = 0.0
 
 BTC15M_PREFIXES = ("KXBTC15M", "KXBTC-15M", "KXBTC15MIN")
 
-# ── State ─────────────────────────────────────────────────────────────────────
 _stop_flag = threading.Event()
 
 
 # ── Timing ────────────────────────────────────────────────────────────────────
 
 def _next_close() -> datetime:
-    """
-    Returns the UTC time of the NEXT BTC 15-min market close.
-    Closes occur at :00, :15, :30, :45 of every UTC hour.
-    """
     now     = datetime.now(timezone.utc)
     next_15 = ((now.minute // 15) + 1) * 15
     if next_15 < 60:
@@ -71,12 +72,11 @@ def _next_close() -> datetime:
 
 
 def _sleep_until(target: datetime) -> None:
-    """Sleep until target UTC time, checking _stop_flag every second."""
     while not _stop_flag.is_set():
-        remaining = (target - datetime.now(timezone.utc)).total_seconds()
-        if remaining <= 0:
+        secs = (target - datetime.now(timezone.utc)).total_seconds()
+        if secs <= 0:
             return
-        time.sleep(min(1.0, remaining))
+        time.sleep(min(1.0, secs))
 
 
 # ── Market discovery ──────────────────────────────────────────────────────────
@@ -93,16 +93,10 @@ def _parse_close_time(m: dict) -> Optional[datetime]:
 
 
 def find_btc15m_market(client: KalshiClient) -> Optional[Tuple[str, datetime]]:
-    """
-    Find the active BTC 15-min market with the nearest future close time.
-    Returns (ticker, close_time_utc) or None.
-
-    Fast path: filtered query with event_ticker=KXBTC15M
-    Slow path: paginate all open markets and scan for KXBTC15M* prefix
-    """
+    """Find the active BTC 15-min market with the nearest future close."""
     now         = datetime.now(timezone.utc)
     best_ticker = None
-    best_close:  Optional[datetime] = None
+    best_close: Optional[datetime] = None
 
     def _consider(m: dict):
         nonlocal best_ticker, best_close
@@ -113,10 +107,9 @@ def find_btc15m_market(client: KalshiClient) -> Optional[Tuple[str, datetime]]:
         if not close_dt or close_dt <= now:
             return
         if best_close is None or close_dt < best_close:
-            best_ticker = t
-            best_close  = close_dt
+            best_ticker, best_close = t, close_dt
 
-    # Fast path
+    # Fast path: event-filtered query
     try:
         data = client.get_markets(limit=20, event_ticker="KXBTC15M", status="open")
         for m in data.get("markets", []):
@@ -126,7 +119,7 @@ def find_btc15m_market(client: KalshiClient) -> Optional[Tuple[str, datetime]]:
     except Exception:
         pass
 
-    # Slow path: paginate
+    # Slow path: paginate all markets
     try:
         cursor = None
         for _ in range(5):
@@ -142,107 +135,279 @@ def find_btc15m_market(client: KalshiClient) -> Optional[Tuple[str, datetime]]:
     return (best_ticker, best_close) if best_ticker else None
 
 
-# ── Price feed ────────────────────────────────────────────────────────────────
+# ── WebSocket price feed ──────────────────────────────────────────────────────
 
-def get_yes_price(client: KalshiClient, ticker: str) -> Optional[int]:
+class WsPriceFeed:
     """
-    Fetch current YES price in cents (1–99) via direct market endpoint.
-    Returns None on any error (caller should retry on next tick).
+    Subscribes to Kalshi's WebSocket ticker channel for one market.
+
+    Price updates are pushed by Kalshi the instant the order book changes —
+    no polling, no sleep. Latency is purely network (typically < 50ms).
+
+    Thread-safe: get_price() can be called from any thread.
+    Auto-reconnects on dropped connections.
+    Falls back gracefully if websockets library is not installed.
     """
+
+    def __init__(self, client: KalshiClient, ticker: str):
+        self.client  = client
+        self.ticker  = ticker
+        self._price  = None           # latest YES price in cents
+        self._lock   = threading.Lock()
+        self._ready  = threading.Event()   # set once first price arrives
+        self._stop   = threading.Event()
+        self._thread = None
+        self._ok     = False          # False if WS unavailable
+
+    def start(self, timeout: float = 5.0) -> bool:
+        """
+        Launch WebSocket thread and wait up to `timeout` seconds for first price.
+        Returns True if WebSocket connected successfully, False to use REST fallback.
+        """
+        try:
+            import websockets   # noqa: F401 — check availability
+        except ImportError:
+            logger.warning("[WS] websockets not installed — using REST fallback")
+            return False
+
+        self._thread = threading.Thread(
+            target=self._thread_main, daemon=True, name="btc15m-ws"
+        )
+        self._thread.start()
+
+        # Wait for first price tick so the hot loop starts with real data
+        self._ready.wait(timeout=timeout)
+        self._ok = self._ready.is_set()
+        if self._ok:
+            logger.info(f"[WS] Feed live — first price: {self._price}¢")
+        else:
+            logger.warning("[WS] Timed out waiting for first price — using REST fallback")
+        return self._ok
+
+    def stop(self) -> None:
+        self._stop.set()
+
+    def get_price(self) -> Optional[int]:
+        with self._lock:
+            return self._price
+
+    def _set_price(self, yes_cents: int) -> None:
+        with self._lock:
+            self._price = yes_cents
+        self._ready.set()
+
+    def _thread_main(self) -> None:
+        asyncio.run(self._ws_loop())
+
+    async def _ws_loop(self) -> None:
+        import websockets
+
+        # Derive WS URL from REST base URL
+        # e.g. https://api.elections.kalshi.com/trade-api/v2
+        #   →  wss://api.elections.kalshi.com/trade-api/ws/v2
+        ws_url = (
+            self.client.base_url
+            .replace("https://", "wss://")
+            .replace("/trade-api/v2", "/trade-api/ws/v2")
+        )
+
+        while not self._stop.is_set():
+            try:
+                # Auth headers — same RSA-PSS signing, path = /trade-api/ws/v2
+                headers = self.client._sign("GET", "/trade-api/ws/v2")
+
+                async with websockets.connect(
+                    ws_url,
+                    additional_headers=headers,
+                    ping_interval=20,
+                    ping_timeout=10,
+                ) as ws:
+                    # Subscribe to ticker channel for this market
+                    await ws.send(json.dumps({
+                        "id": 1,
+                        "cmd": "subscribe",
+                        "params": {
+                            "channels": ["ticker"],
+                            "market_tickers": [self.ticker],
+                        },
+                    }))
+                    logger.debug(f"[WS] Subscribed to ticker:{self.ticker}")
+
+                    async for raw in ws:
+                        if self._stop.is_set():
+                            return
+                        self._handle_msg(raw)
+
+            except Exception as e:
+                if not self._stop.is_set():
+                    logger.debug(f"[WS] Connection dropped ({e}) — reconnecting in 1s")
+                    await asyncio.sleep(1)
+
+    def _handle_msg(self, raw: str) -> None:
+        try:
+            data = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            return
+
+        msg_type = data.get("type", "")
+        msg      = data.get("msg", {})
+
+        if msg_type not in ("ticker", "subscribed"):
+            return
+
+        # Handle both new _dollars format and legacy integer cents
+        yes_px = None
+
+        # New format: yes_ask_dollars = "0.7600"
+        v = msg.get("yes_ask_dollars")
+        if v is not None:
+            try:
+                c = int(round(float(v) * 100))
+                if 1 <= c <= 99:
+                    yes_px = c
+            except (TypeError, ValueError):
+                pass
+
+        # Legacy: yes_ask = 76 (integer cents)
+        if yes_px is None:
+            v = msg.get("yes_ask")
+            if v is not None:
+                try:
+                    c = int(v)
+                    if 1 <= c <= 99:
+                        yes_px = c
+                except (TypeError, ValueError):
+                    pass
+
+        # Last resort: last_price
+        if yes_px is None:
+            for field in ("last_price_dollars", "last_price"):
+                v = msg.get(field)
+                if v is None:
+                    continue
+                try:
+                    if "dollars" in field:
+                        c = int(round(float(v) * 100))
+                    else:
+                        c = int(v)
+                    if 1 <= c <= 99:
+                        yes_px = c
+                        break
+                except (TypeError, ValueError):
+                    pass
+
+        if yes_px is not None:
+            self._set_price(yes_px)
+
+
+# ── REST price (fallback) ─────────────────────────────────────────────────────
+
+def get_yes_price_rest(client: KalshiClient, ticker: str) -> Optional[int]:
+    """Direct REST fetch. No sleep — caller loops as fast as HTTP allows."""
     try:
         data = client._get(f"/markets/{ticker}")
         m    = data.get("market", data)
-        # Prefer yes_ask (what we'd pay as taker), fall back to last trade or bid
         return _pc(m, "yes_ask") or _pc(m, "last_price") or _pc(m, "yes_bid")
     except Exception:
         return None
 
 
-# ── Order helpers ─────────────────────────────────────────────────────────────
+# ── Orders ────────────────────────────────────────────────────────────────────
 
-def place_taker_buy(client: KalshiClient, ticker: str, side: str,
-                    price_cents: int, count: int) -> bool:
-    """Taker buy order. Returns True on success."""
+def _taker_buy(client: KalshiClient, ticker: str, side: str,
+               price_cents: int, count: int) -> bool:
     try:
         client.place_limit_order(
-            ticker=ticker,
-            side=side,
-            action="buy",
-            price_cents=price_cents,
-            count=count,
-            post_only=False,   # taker — fill immediately at market
-        )
-        return True
-    except Exception as e:
-        logger.error(f"Buy order failed: {e}")
-        return False
-
-
-def place_taker_sell(client: KalshiClient, ticker: str, side: str,
-                     price_cents: int, count: int) -> bool:
-    """
-    Taker sell order. Undercuts by 2¢ to guarantee fill.
-    Returns True on success.
-    """
-    sell_price = max(1, price_cents - 2)
-    try:
-        client.place_limit_order(
-            ticker=ticker,
-            side=side,
-            action="sell",
-            price_cents=sell_price,
-            count=count,
+            ticker=ticker, side=side, action="buy",
+            price_cents=price_cents, count=count,
             post_only=False,
         )
         return True
     except Exception as e:
-        logger.error(f"Sell order failed: {e}")
+        logger.error(f"Buy failed: {e}")
         return False
 
 
-# ── Core 5-minute loop ────────────────────────────────────────────────────────
+def _taker_sell(client: KalshiClient, ticker: str, side: str,
+                price_cents: int, count: int) -> bool:
+    """Undercut by 2¢ to guarantee taker fill."""
+    sell_price = max(1, price_cents - 2)
+    try:
+        client.place_limit_order(
+            ticker=ticker, side=side, action="sell",
+            price_cents=sell_price, count=count,
+            post_only=False,
+        )
+        return True
+    except Exception as e:
+        logger.error(f"Sell failed: {e}")
+        return False
+
+
+# ── Core hot loop ─────────────────────────────────────────────────────────────
 
 def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
                  dry_run: bool = False) -> None:
     """
-    The hot loop. Runs from window_start until close_time.
+    The 5-minute hot loop.
 
-    State machine:
-      WATCHING  →  entry fires when a crossover is detected
-      HOLDING   →  monitors for stop gain (95¢) or stop loss (65¢)
-      DONE      →  stop gain hit, no more entries this window
+    Price source (in priority order):
+      1. WebSocket feed — real-time push, < 50ms latency
+      2. REST polling   — no sleep, ~100-300ms per call
+
+    State machine per window:
+      WATCHING   → enters on 75¢ crossover from below
+      HOLDING    → exits on stop gain (95¢) or stop loss (65¢)
+      DONE       → stop gain hit, window finished
     """
     remaining = (close_time - datetime.now(timezone.utc)).total_seconds()
     logger.info(
         f"━━━ WINDOW OPEN ━━━  {ticker}  |  {remaining:.0f}s  |  "
-        f"ENTRY≥{ENTRY_CENTS}¢  SL={STOP_LOSS_CENTS}¢  SG={STOP_GAIN_CENTS}¢"
+        f"entry≥{ENTRY_CENTS}¢  SL={STOP_LOSS_CENTS}¢  SG={STOP_GAIN_CENTS}¢"
     )
 
-    # Crossover tracking — must see price BELOW threshold before it can trigger
-    seen_yes_below = False   # YES has been < ENTRY_CENTS
-    seen_no_below  = False   # NO  has been < ENTRY_CENTS  (i.e. YES > 100 - ENTRY_CENTS)
+    # Start WebSocket feed — falls back to REST automatically if unavailable
+    ws = WsPriceFeed(client, ticker)
+    use_ws = ws.start(timeout=4.0)
+    if use_ws:
+        logger.info("[WS] ⚡ Real-time price feed active")
+    else:
+        logger.info("[REST] Polling mode — no artificial sleep")
 
-    # Position tracking
+    def _get_price() -> Optional[int]:
+        if use_ws:
+            return ws.get_price()
+        return get_yes_price_rest(client, ticker)
+
+    # Entry tracking — must see price BELOW threshold before crossover can fire
+    seen_yes_below = False
+    seen_no_below  = False
+
+    # Position state
     holding     = False
-    pos_side    = ""     # "yes" | "no"
+    pos_side    = ""
     pos_count   = 0
-    pos_entry   = 0      # cents
-    last_sl_ts  = 0.0    # time.time() of last stop loss
-    done        = False  # window finished (stop gain hit)
+    pos_entry   = 0
+    last_sl_ts  = 0.0
+    done        = False
+
+    ticks = 0
+    t_start = time.time()
 
     while not _stop_flag.is_set() and not done:
         if datetime.now(timezone.utc) >= close_time:
             break
 
-        yes_px = get_yes_price(client, ticker)
+        yes_px = _get_price()
         if yes_px is None:
-            time.sleep(POLL_INTERVAL_S)
+            # Brief pause only on error to avoid hammering on repeated failures
+            time.sleep(0.05)
             continue
 
+        ticks += 1
         no_px = 100 - yes_px
 
         if holding:
-            # ── Manage the open position ──────────────────────────────────
             pos_px = yes_px if pos_side == "yes" else no_px
             secs   = (close_time - datetime.now(timezone.utc)).total_seconds()
 
@@ -252,7 +417,7 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
                     f"@ {pos_px}¢  ({secs:.0f}s left)"
                 )
                 if not dry_run:
-                    place_taker_sell(client, ticker, pos_side, pos_px, pos_count)
+                    _taker_sell(client, ticker, pos_side, pos_px, pos_count)
                     pnl = (pos_px - 2 - pos_entry) * pos_count / 100
                     logger.info(f"   PnL ≈ ${pnl:+.2f}")
                 done = True
@@ -260,38 +425,34 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
             elif pos_px <= STOP_LOSS_CENTS:
                 logger.info(
                     f"🛑 STOP LOSS  {pos_side.upper()} x{pos_count} "
-                    f"@ {pos_px}¢  ({secs:.0f}s left) — will re-watch"
+                    f"@ {pos_px}¢  ({secs:.0f}s left) — watching for re-entry"
                 )
                 if not dry_run:
-                    place_taker_sell(client, ticker, pos_side, pos_px, pos_count)
+                    _taker_sell(client, ticker, pos_side, pos_px, pos_count)
                     pnl = (pos_px - 2 - pos_entry) * pos_count / 100
                     logger.info(f"   PnL ≈ ${pnl:+.2f}")
                 holding        = False
                 last_sl_ts     = time.time()
-                # Require a FRESH crossover before re-entering
-                seen_yes_below = False
+                seen_yes_below = False   # require fresh crossover to re-enter
                 seen_no_below  = False
 
         else:
-            # ── Watch for a crossover ─────────────────────────────────────
-
+            # Update "seen below" flags
             if yes_px < ENTRY_CENTS:
                 seen_yes_below = True
-            if no_px < ENTRY_CENTS:       # no_px < 75  ↔  yes_px > 25
+            if no_px < ENTRY_CENTS:
                 seen_no_below = True
 
-            cooldown_active = (time.time() - last_sl_ts) < REENTRY_COOLDOWN_S
+            in_cooldown = (time.time() - last_sl_ts) < REENTRY_COOLDOWN_S
 
-            if not cooldown_active:
+            if not in_cooldown:
                 entry_side  = ""
                 entry_price = 0
 
                 if seen_yes_below and yes_px >= ENTRY_CENTS:
-                    entry_side  = "yes"
-                    entry_price = yes_px
+                    entry_side, entry_price = "yes", yes_px
                 elif seen_no_below and no_px >= ENTRY_CENTS:
-                    entry_side  = "no"
-                    entry_price = no_px
+                    entry_side, entry_price = "no", no_px
 
                 if entry_side:
                     secs = (close_time - datetime.now(timezone.utc)).total_seconds()
@@ -300,88 +461,81 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
                         f"({secs:.0f}s left)"
                     )
 
-                    if not dry_run:
-                        try:
-                            balance = client.get_balance()
-                        except Exception:
-                            balance = STARTING_BANKROLL_USD
+                    try:
+                        balance = client.get_balance()
+                    except Exception:
+                        balance = STARTING_BANKROLL_USD
 
-                        count    = max(1, int(balance * POSITION_PCT * 100
-                                              / max(entry_price, 1)))
-                        cost_usd = count * entry_price / 100
+                    count    = max(1, int(balance * POSITION_PCT * 100
+                                         / max(entry_price, 1)))
+                    cost_usd = count * entry_price / 100
 
-                        if cost_usd >= MIN_TRADE_USD:
-                            ok = place_taker_buy(client, ticker,
-                                                 entry_side, entry_price, count)
-                            if ok:
-                                holding    = True
-                                pos_side   = entry_side
-                                pos_count  = count
-                                pos_entry  = entry_price
+                    if cost_usd >= MIN_TRADE_USD:
+                        if not dry_run:
+                            ok = _taker_buy(client, ticker,
+                                            entry_side, entry_price, count)
+                        else:
+                            ok = True
+                            logger.info(
+                                f"[DRY-RUN] Would buy {entry_side.upper()} "
+                                f"x{count} @ {entry_price}¢  ${cost_usd:.2f}"
+                            )
+
+                        if ok:
+                            holding    = True
+                            pos_side   = entry_side
+                            pos_count  = count
+                            pos_entry  = entry_price
+                            if not dry_run:
                                 logger.info(
                                     f"✅ Entered {entry_side.upper()} "
-                                    f"x{count} @ {entry_price}¢  "
-                                    f"cost=${cost_usd:.2f}"
+                                    f"x{count} @ {entry_price}¢  ${cost_usd:.2f}"
                                 )
-                                # Reset so we don't re-fire on the same candle
-                                seen_yes_below = False
-                                seen_no_below  = False
-                        else:
-                            logger.debug(f"Trade too small (${cost_usd:.2f})")
+                            seen_yes_below = False
+                            seen_no_below  = False
                     else:
-                        # Dry-run: simulate entry
-                        try:
-                            balance = client.get_balance()
-                        except Exception:
-                            balance = STARTING_BANKROLL_USD
-                        count = max(1, int(balance * POSITION_PCT * 100
-                                          / max(entry_price, 1)))
-                        holding    = True
-                        pos_side   = entry_side
-                        pos_count  = count
-                        pos_entry  = entry_price
-                        logger.info(
-                            f"[DRY-RUN] Would enter {entry_side.upper()} "
-                            f"x{count} @ {entry_price}¢"
-                        )
-                        seen_yes_below = False
-                        seen_no_below  = False
+                        logger.debug(f"Trade too small (${cost_usd:.2f} < ${MIN_TRADE_USD})")
 
-        time.sleep(POLL_INTERVAL_S)
+        # WebSocket mode: tiny sleep keeps CPU sane while waiting for next push
+        # REST mode: no sleep — loop re-fires immediately after HTTP response
+        if use_ws:
+            time.sleep(0.01)   # 100 Hz check of in-memory value
 
     # ── Window closed ─────────────────────────────────────────────────────────
+    elapsed = time.time() - t_start
+    hz      = ticks / elapsed if elapsed > 0 else 0
+    ws.stop()
+
     if holding:
         secs = max(0, (close_time - datetime.now(timezone.utc)).total_seconds())
         logger.info(
             f"━━━ WINDOW CLOSED ━━━  Holding {pos_side.upper()} x{pos_count} "
-            f"@ {pos_entry}¢  →  resolves in ~{secs:.0f}s"
+            f"@ {pos_entry}¢ → resolves in ~{secs:.0f}s  "
+            f"[{ticks} ticks @ {hz:.0f} Hz]"
         )
     elif done:
-        logger.info("━━━ WINDOW CLOSED ━━━  Stop gain taken ✓")
+        logger.info(
+            f"━━━ WINDOW CLOSED ━━━  Stop gain taken ✓  "
+            f"[{ticks} ticks @ {hz:.0f} Hz]"
+        )
     else:
-        logger.info("━━━ WINDOW CLOSED ━━━  No position")
+        logger.info(
+            f"━━━ WINDOW CLOSED ━━━  No position  "
+            f"[{ticks} ticks @ {hz:.0f} Hz]"
+        )
 
 
 # ── Main loop ─────────────────────────────────────────────────────────────────
 
 def run(client: KalshiClient, dry_run: bool = False) -> None:
-    """
-    Main perpetual loop. Runs forever until KeyboardInterrupt or _stop_flag.
-
-      1. Compute next window start (5 min before close)
-      2. Sleep until then
-      3. Find the active BTC 15-min market
-      4. Run the hot-loop scalper
-      5. Repeat
-    """
     bal = client.get_balance()
     logger.info(
-        f"BTC 15m Scalper ready | balance=${bal:.2f} | "
+        f"BTC 15m Scalper | balance=${bal:.2f} | "
         f"{'DRY-RUN' if dry_run else 'LIVE 🔴'}"
     )
     logger.info(
-        f"Parameters: entry≥{ENTRY_CENTS}¢  SL={STOP_LOSS_CENTS}¢  "
-        f"SG={STOP_GAIN_CENTS}¢  size={POSITION_PCT:.0%}  poll={POLL_INTERVAL_S}s"
+        f"entry≥{ENTRY_CENTS}¢  SL={STOP_LOSS_CENTS}¢  SG={STOP_GAIN_CENTS}¢  "
+        f"size={POSITION_PCT:.0%}  min=${MIN_TRADE_USD}"
     )
 
     while not _stop_flag.is_set():
@@ -390,58 +544,47 @@ def run(client: KalshiClient, dry_run: bool = False) -> None:
         now          = datetime.now(timezone.utc)
         sleep_secs   = (window_start - now).total_seconds()
 
-        # Show next window in both UTC and MST (UTC-7)
         close_utc = close_time.strftime("%H:%M UTC")
         close_mst = (close_time - timedelta(hours=7)).strftime("%H:%M MST")
         close_mdt = (close_time - timedelta(hours=6)).strftime("%H:%M MDT")
 
         if sleep_secs > 2:
             logger.info(
-                f"Waiting {sleep_secs:.0f}s → next window closes "
-                f"{close_utc}  /  {close_mst}  /  {close_mdt}"
+                f"Next window: closes {close_utc} / {close_mst} / {close_mdt}  "
+                f"(sleeping {sleep_secs:.0f}s)"
             )
             _sleep_until(window_start)
 
         if _stop_flag.is_set():
             break
 
-        # Resolve market ticker right before the window
         result = find_btc15m_market(client)
         if not result:
-            logger.warning(
-                "No active BTC 15-min market found — "
-                "will retry next cycle"
-            )
+            logger.warning("No active BTC 15-min market found — retrying next cycle")
             time.sleep(60)
             continue
 
         ticker, market_close = result
         logger.info(
-            f"Market locked: {ticker}  "
+            f"Market: {ticker}  "
             f"closes {market_close.strftime('%H:%M:%S')} UTC"
         )
 
         scalp_window(client, ticker, market_close, dry_run=dry_run)
-
-        # Short pause to avoid a tight loop at the boundary
-        time.sleep(5)
+        time.sleep(5)   # avoid clock-edge race before next_close() recalculates
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    import signal
-
     parser = argparse.ArgumentParser(
-        description="BTC 15-minute breakout scalper for Kalshi"
+        description="BTC 15-minute breakout scalper — WebSocket feed, sub-50ms latency"
     )
-    parser.add_argument(
-        "--dry-run", action="store_true",
-        help="Watch and log signals but place no real orders"
-    )
-    args = argparse.Namespace(**vars(parser.parse_args()))
+    parser.add_argument("--dry-run", action="store_true",
+                        help="Log signals without placing orders")
+    args = parser.parse_args()
 
-    client = KalshiClient()
+    _client = KalshiClient()
 
     def _shutdown(sig, frame):
         logger.info("Shutting down…")
@@ -451,4 +594,4 @@ if __name__ == "__main__":
     signal.signal(signal.SIGINT,  _shutdown)
     signal.signal(signal.SIGTERM, _shutdown)
 
-    run(client, dry_run=args.dry_run)
+    run(_client, dry_run=args.dry_run)
