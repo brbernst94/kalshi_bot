@@ -359,8 +359,27 @@ def get_yes_price_rest(client: KalshiClient, ticker: str) -> Optional[int]:
     try:
         data = client._get(f"/markets/{ticker}")
         m    = data.get("market", data)
-        return _pc(m, "yes_ask") or _pc(m, "last_price") or _pc(m, "yes_bid")
-    except Exception:
+
+        # Try all known price fields
+        price = (
+            _pc(m, "yes_ask")   or
+            _pc(m, "last_price") or
+            _pc(m, "yes_bid")   or
+            _pc(m, "yes_price") or
+            _pc(m, "no_ask")    # last resort: derive YES from NO ask
+        )
+
+        if price is None:
+            # Log the actual fields returned so we can diagnose
+            keys = [k for k in m.keys() if "price" in k.lower()
+                    or "ask" in k.lower() or "bid" in k.lower()]
+            logger.warning(f"[REST] No price in response for {ticker}. "
+                           f"Price-related keys: {keys} | "
+                           f"Sample: { {k: m[k] for k in keys[:6]} }")
+
+        return price
+    except Exception as e:
+        logger.warning(f"[REST] Price fetch failed for {ticker}: {e}")
         return None
 
 
@@ -420,7 +439,7 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
 
     # Start WebSocket feed — falls back to REST automatically if unavailable
     ws = WsPriceFeed(client, ticker)
-    use_ws = ws.start(timeout=4.0)
+    use_ws = ws.start(timeout=10.0)
     if use_ws:
         logger.info("[WS] ⚡ Real-time price feed active")
     else:
