@@ -49,7 +49,7 @@ ENTRY_CENTS        = 75    # Enter when side crosses ABOVE this FROM BELOW
 STOP_LOSS_CENTS    = 50    # Exit if position price drops to this
 STOP_GAIN_CENTS    = 95    # Take profit when position price reaches this
 WINDOW_MINUTES     = 5     # Minutes before market close to start watching
-POSITION_PCT       = 0.75  # 75% of available cash per trade
+POSITION_PCT       = 0.80  # 80% of available cash per trade
 MIN_TRADE_USD      = 2.00  # Skip if trade cost is below this
 REENTRY_COOLDOWN_S = 30    # Wait after stop loss before re-entry
 
@@ -432,7 +432,7 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
     remaining = (close_time - datetime.now(timezone.utc)).total_seconds()
     logger.info(
         f"━━━ WINDOW OPEN ━━━  {ticker}  |  {remaining:.0f}s  |  "
-        f"entry≥{ENTRY_CENTS}¢  SL={STOP_LOSS_CENTS}¢  SG={STOP_GAIN_CENTS}¢"
+        f"entry≥{ENTRY_CENTS}¢  SL={STOP_LOSS_CENTS}¢  hold-to-close"
     )
 
     # Start WebSocket feed — falls back to REST automatically if unavailable
@@ -480,18 +480,7 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
             pos_px = yes_px if pos_side == "yes" else no_px
             secs   = (close_time - datetime.now(timezone.utc)).total_seconds()
 
-            if pos_px >= STOP_GAIN_CENTS:
-                logger.info(
-                    f"🎯 STOP GAIN  {pos_side.upper()} x{pos_count} "
-                    f"@ {pos_px}¢  ({secs:.0f}s left)"
-                )
-                if not dry_run:
-                    _market_sell(client, ticker, pos_side, pos_count)
-                    pnl = (pos_px - pos_entry) * pos_count / 100
-                    logger.info(f"   PnL ≈ ${pnl:+.2f}")
-                done = True
-
-            elif pos_px <= STOP_LOSS_CENTS:
+            if pos_px <= STOP_LOSS_CENTS:
                 logger.info(
                     f"🛑 STOP LOSS  {pos_side.upper()} x{pos_count} "
                     f"@ {pos_px}¢  ({secs:.0f}s left) — watching for re-entry"
@@ -603,7 +592,7 @@ def run(client: KalshiClient, dry_run: bool = False) -> None:
         f"{'DRY-RUN' if dry_run else 'LIVE 🔴'}"
     )
     logger.info(
-        f"entry≥{ENTRY_CENTS}¢  SL={STOP_LOSS_CENTS}¢  SG={STOP_GAIN_CENTS}¢  "
+        f"entry≥{ENTRY_CENTS}¢  SL={STOP_LOSS_CENTS}¢  hold-to-close  "
         f"size={POSITION_PCT:.0%}  min=${MIN_TRADE_USD}"
     )
 
