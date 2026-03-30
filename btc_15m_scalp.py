@@ -45,7 +45,7 @@ logging.basicConfig(
 logger = logging.getLogger("btc15m")
 
 # ── Tunable parameters ────────────────────────────────────────────────────────
-ENTRY_CENTS        = 75    # Enter when side crosses ABOVE this FROM BELOW
+ENTRY_CENTS        = 80    # Enter when side crosses ABOVE this FROM BELOW
 STOP_LOSS_CENTS    = 50    # Exit if position price drops to this
 STOP_GAIN_CENTS    = 95    # Take profit when position price reaches this
 WINDOW_MINUTES     = 5     # Minutes before market close to start watching
