@@ -56,7 +56,7 @@ REENTRY_COOLDOWN_S = 30    # Wait after stop loss before re-entry
 # REST fallback: no artificial sleep — purely HTTP-latency limited
 REST_POLL_SLEEP    = 0.0
 
-BTC15M_PREFIXES = ("KXBTC15M", "KXBTC-15M", "KXBTC15MIN")
+BTC15M_PREFIXES = ("KXBTC15M",)  # confirmed: series_ticker=KXBTC15M, format KXBTC15M-YYMMMDDHHММ
 
 _stop_flag = threading.Event()
 
@@ -135,18 +135,15 @@ def find_btc15m_market(client: KalshiClient) -> Optional[Tuple[str, datetime]]:
         if best_close is None or close_dt < best_close:
             best_ticker, best_close = ticker, close_dt
 
-    # Try known event ticker prefixes first (fast)
-    for event_prefix in ("KXBTC15M", "KXBTCUP", "KXBTCDOWN",
-                         "KXBTC-15", "KXBTCMOM", "KXBTCINX"):
-        try:
-            data = client.get_markets(limit=50, event_ticker=event_prefix,
-                                      status="open")
-            for m in data.get("markets", []):
-                _consider(m)
-            if best_ticker:
-                return (best_ticker, best_close)
-        except Exception:
-            pass
+    # Fast path: series_ticker=KXBTC15M (correct Kalshi API parameter)
+    try:
+        data = client.get_markets(limit=50, series_ticker="KXBTC15M", status="open")
+        for m in data.get("markets", []):
+            _consider(m)
+        if best_ticker:
+            return (best_ticker, best_close)
+    except Exception:
+        pass
 
     # Full paginated scan — look at all open markets
     try:
