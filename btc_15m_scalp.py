@@ -49,7 +49,7 @@ ENTRY_CENTS        = 75    # Enter when side crosses ABOVE this FROM BELOW
 STOP_LOSS_CENTS    = 65    # Exit if position price drops to this
 STOP_GAIN_CENTS    = 95    # Take profit when position price reaches this
 WINDOW_MINUTES     = 5     # Minutes before market close to start watching
-POSITION_PCT       = 0.07  # 7% of account balance per trade
+POSITION_PCT       = 0.75  # 75% of available cash per trade
 MIN_TRADE_USD      = 2.00  # Skip if trade cost is below this
 REENTRY_COOLDOWN_S = 30    # Wait after stop loss before re-entry
 
@@ -462,7 +462,7 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
                     )
 
                     try:
-                        balance = client.get_balance()
+                        balance = client.get_cash()   # spendable cash only
                     except Exception:
                         balance = STARTING_BANKROLL_USD
 
