@@ -46,7 +46,7 @@ logger = logging.getLogger("btc15m")
 
 # ── Tunable parameters ────────────────────────────────────────────────────────
 ENTRY_CENTS        = 75    # Enter when side crosses ABOVE this FROM BELOW
-STOP_LOSS_CENTS    = 65    # Exit if position price drops to this
+STOP_LOSS_CENTS    = 50    # Exit if position price drops to this
 STOP_GAIN_CENTS    = 95    # Take profit when position price reaches this
 WINDOW_MINUTES     = 5     # Minutes before market close to start watching
 POSITION_PCT       = 0.75  # 75% of available cash per trade
@@ -385,12 +385,12 @@ def get_yes_price_rest(client: KalshiClient, ticker: str) -> Optional[int]:
 
 # ── Orders ────────────────────────────────────────────────────────────────────
 
-def _taker_buy(client: KalshiClient, ticker: str, side: str,
-               price_cents: int, count: int) -> bool:
+def _market_buy(client: KalshiClient, ticker: str, side: str, count: int) -> bool:
+    """Market buy — limit at 99¢ sweeps the entire ask side instantly."""
     try:
         client.place_limit_order(
             ticker=ticker, side=side, action="buy",
-            price_cents=price_cents, count=count,
+            price_cents=99, count=count,
             post_only=False,
         )
         return True
@@ -399,14 +399,12 @@ def _taker_buy(client: KalshiClient, ticker: str, side: str,
         return False
 
 
-def _taker_sell(client: KalshiClient, ticker: str, side: str,
-                price_cents: int, count: int) -> bool:
-    """Undercut by 2¢ to guarantee taker fill."""
-    sell_price = max(1, price_cents - 2)
+def _market_sell(client: KalshiClient, ticker: str, side: str, count: int) -> bool:
+    """Market sell — limit at 1¢ hits the entire bid side instantly."""
     try:
         client.place_limit_order(
             ticker=ticker, side=side, action="sell",
-            price_cents=sell_price, count=count,
+            price_cents=1, count=count,
             post_only=False,
         )
         return True
@@ -488,8 +486,8 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
                     f"@ {pos_px}¢  ({secs:.0f}s left)"
                 )
                 if not dry_run:
-                    _taker_sell(client, ticker, pos_side, pos_px, pos_count)
-                    pnl = (pos_px - 2 - pos_entry) * pos_count / 100
+                    _market_sell(client, ticker, pos_side, pos_count)
+                    pnl = (pos_px - pos_entry) * pos_count / 100
                     logger.info(f"   PnL ≈ ${pnl:+.2f}")
                 done = True
 
@@ -499,8 +497,8 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
                     f"@ {pos_px}¢  ({secs:.0f}s left) — watching for re-entry"
                 )
                 if not dry_run:
-                    _taker_sell(client, ticker, pos_side, pos_px, pos_count)
-                    pnl = (pos_px - 2 - pos_entry) * pos_count / 100
+                    _market_sell(client, ticker, pos_side, pos_count)
+                    pnl = (pos_px - pos_entry) * pos_count / 100
                     logger.info(f"   PnL ≈ ${pnl:+.2f}")
                 holding        = False
                 last_sl_ts     = time.time()
@@ -543,8 +541,8 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
 
                     if cost_usd >= MIN_TRADE_USD:
                         if not dry_run:
-                            ok = _taker_buy(client, ticker,
-                                            entry_side, entry_price, count)
+                            ok = _market_buy(client, ticker,
+                                             entry_side, count)
                         else:
                             ok = True
                             logger.info(
