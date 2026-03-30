@@ -93,44 +93,84 @@ def _parse_close_time(m: dict) -> Optional[datetime]:
 
 
 def find_btc15m_market(client: KalshiClient) -> Optional[Tuple[str, datetime]]:
-    """Find the active BTC 15-min market with the nearest future close."""
-    now         = datetime.now(timezone.utc)
+    """
+    Find the active BTC 15-min market with the nearest future close.
+
+    Strategy: scan all open markets for any BTC market closing within
+    the next 20 minutes. This catches the real ticker format whatever
+    Kalshi decides to call it.
+    """
+    now        = datetime.now(timezone.utc)
+    horizon    = now + timedelta(minutes=20)
+
     best_ticker = None
     best_close: Optional[datetime] = None
+    btc_seen   = []   # for debug logging
 
     def _consider(m: dict):
         nonlocal best_ticker, best_close
-        t = m.get("ticker", "")
-        if not any(t.startswith(p) for p in BTC15M_PREFIXES):
+        ticker = m.get("ticker", "")
+        title  = (m.get("title") or m.get("subtitle") or "").lower()
+
+        # Must mention BTC/bitcoin somewhere
+        is_btc = (
+            "btc"     in ticker.upper() or
+            "bitcoin" in title
+        )
+        if not is_btc:
             return
+
         close_dt = _parse_close_time(m)
-        if not close_dt or close_dt <= now:
+        if not close_dt:
             return
+
+        # Log every BTC market we see for debugging
+        if close_dt > now:
+            btc_seen.append((ticker, close_dt))
+
+        # Only care about markets closing in the next 20 minutes
+        if close_dt <= now or close_dt > horizon:
+            return
+
         if best_close is None or close_dt < best_close:
-            best_ticker, best_close = t, close_dt
+            best_ticker, best_close = ticker, close_dt
 
-    # Fast path: event-filtered query
-    try:
-        data = client.get_markets(limit=20, event_ticker="KXBTC15M", status="open")
-        for m in data.get("markets", []):
-            _consider(m)
-        if best_ticker:
-            return (best_ticker, best_close)
-    except Exception:
-        pass
+    # Try known event ticker prefixes first (fast)
+    for event_prefix in ("KXBTC15M", "KXBTCUP", "KXBTCDOWN",
+                         "KXBTC-15", "KXBTCMOM", "KXBTCINX"):
+        try:
+            data = client.get_markets(limit=50, event_ticker=event_prefix,
+                                      status="open")
+            for m in data.get("markets", []):
+                _consider(m)
+            if best_ticker:
+                return (best_ticker, best_close)
+        except Exception:
+            pass
 
-    # Slow path: paginate all markets
+    # Full paginated scan — look at all open markets
     try:
         cursor = None
-        for _ in range(5):
+        for _ in range(10):
             data   = client.get_markets(limit=200, cursor=cursor, status="open")
             for m in data.get("markets", []):
                 _consider(m)
             cursor = data.get("cursor")
-            if not cursor or best_ticker:
+            if not cursor:
+                break
+            if best_ticker:
                 break
     except Exception as e:
         logger.error(f"Market lookup failed: {e}")
+
+    # Always log nearby BTC markets so we can see the real ticker format
+    if btc_seen:
+        btc_seen.sort(key=lambda x: x[1])
+        logger.info(f"[BTC15M] BTC markets found (next 6h):")
+        for t, dt in btc_seen[:10]:
+            logger.info(f"  {t}  closes {dt.strftime('%H:%M:%S')} UTC")
+    else:
+        logger.warning("[BTC15M] No BTC markets found at all in open markets")
 
     return (best_ticker, best_close) if best_ticker else None
 
