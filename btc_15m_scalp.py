@@ -45,7 +45,9 @@ logging.basicConfig(
 logger = logging.getLogger("btc15m")
 
 # ── Tunable parameters ────────────────────────────────────────────────────────
-ENTRY_MOVE_CENTS   = 5     # Enter when price moves ≥5¢ from cycle-open reference
+ENTRY_MOVE_PCT     = 0.15  # Enter on ≥15% relative move from cycle-open reference
+MIN_ENTRY_CENTS    = 40    # Only buy a side when it's priced ≥40¢ (avoid noise)
+CONFIRM_SECS       = 2.0   # Price must hold above threshold this long before entry
 STOP_LOSS_PCT      = 0.10  # Exit if position loses 10% of invested capital
 STOP_GAIN_PCT      = 0.10  # Exit if position gains 10% of invested capital
 WATCH_MINUTES      = 10    # Watch the first N minutes of each 15-min cycle
@@ -433,8 +435,8 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
     remaining = (close_time - datetime.now(timezone.utc)).total_seconds()
     logger.info(
         f"━━━ WINDOW OPEN ━━━  {ticker}  |  {remaining:.0f}s  |  "
-        f"move≥{ENTRY_MOVE_CENTS}¢  SL=-{STOP_LOSS_PCT:.0%}  SG=+{STOP_GAIN_PCT:.0%}  "
-        f"exit@{EXIT_BEFORE_CLOSE}m-left"
+        f"move≥{ENTRY_MOVE_PCT:.0%}  min≥{MIN_ENTRY_CENTS}¢  confirm={CONFIRM_SECS}s  "
+        f"SL=-{STOP_LOSS_PCT:.0%}  SG=+{STOP_GAIN_PCT:.0%}  exit@{EXIT_BEFORE_CLOSE}m-left"
     )
 
     # Start WebSocket feed — falls back to REST automatically if unavailable
@@ -450,8 +452,12 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
             return ws.get_price()
         return get_yes_price_rest(client, ticker)
 
-    # Capture reference price at cycle open — entry fires on ≥5¢ move from here
+    # Capture reference price at cycle open — entry fires on relative move from here
     ref_price: Optional[int] = None
+
+    # Confirmation state — signal must hold for CONFIRM_SECS before we enter
+    signal_side  = ""   # "yes" or "no" currently above threshold
+    signal_since = 0.0  # time.time() when signal first appeared
 
     # Position state
     holding    = False
@@ -508,9 +514,10 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
                     _market_sell(client, ticker, pos_side, pos_count)
                     pnl = (pos_px - pos_entry) * pos_count / 100
                     logger.info(f"   PnL ≈ ${pnl:+.2f}")
-                holding    = False
-                last_sl_ts = time.time()
-                ref_price  = yes_px  # reset reference for next entry signal
+                holding      = False
+                last_sl_ts   = time.time()
+                ref_price    = yes_px  # reset reference for next entry signal
+                signal_side  = ""
 
             elif pnl_pct <= -STOP_LOSS_PCT:
                 logger.info(
@@ -521,9 +528,10 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
                     _market_sell(client, ticker, pos_side, pos_count)
                     pnl = (pos_px - pos_entry) * pos_count / 100
                     logger.info(f"   PnL ≈ ${pnl:+.2f}")
-                holding    = False
-                last_sl_ts = time.time()
-                ref_price  = yes_px  # reset reference after stop loss
+                holding      = False
+                last_sl_ts   = time.time()
+                ref_price    = yes_px  # reset reference after stop loss
+                signal_side  = ""
 
         else:
             # Don't enter new positions inside the exit window
@@ -533,20 +541,32 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
             in_cooldown = (time.time() - last_sl_ts) < REENTRY_COOLDOWN_S
 
             if not in_cooldown and ref_price is not None:
-                move       = yes_px - ref_price
-                entry_side  = ""
-                entry_price = 0
+                move_pct = (yes_px - ref_price) / ref_price
 
-                if move >= ENTRY_MOVE_CENTS:
-                    entry_side, entry_price = "yes", yes_px
-                elif move <= -ENTRY_MOVE_CENTS:
-                    entry_side, entry_price = "no", no_px
+                # Determine which side (if any) has a qualifying signal
+                raw_side = ""
+                if move_pct >= ENTRY_MOVE_PCT and yes_px >= MIN_ENTRY_CENTS:
+                    raw_side = "yes"
+                elif move_pct <= -ENTRY_MOVE_PCT and no_px >= MIN_ENTRY_CENTS:
+                    raw_side = "no"
+
+                # Track confirmation — signal must hold for CONFIRM_SECS
+                if raw_side and raw_side == signal_side:
+                    confirmed = (time.time() - signal_since) >= CONFIRM_SECS
+                else:
+                    signal_side  = raw_side
+                    signal_since = time.time()
+                    confirmed    = False
+
+                entry_side  = signal_side if confirmed else ""
+                entry_price = yes_px if entry_side == "yes" else no_px if entry_side == "no" else 0
 
                 if entry_side:
+                    signal_side = ""   # reset so we don't re-trigger immediately
                     secs = (close_time - now).total_seconds()
                     logger.info(
-                        f"🔼 MOVE  {entry_side.upper()} @ {entry_price}¢  "
-                        f"(ref={ref_price}¢ move={move:+d}¢  {secs:.0f}s left)"
+                        f"🔼 SIGNAL  {entry_side.upper()} @ {entry_price}¢  "
+                        f"(ref={ref_price}¢ move={move_pct:+.1%}  {secs:.0f}s left)"
                     )
 
                     try:
@@ -620,7 +640,8 @@ def run(client: KalshiClient, dry_run: bool = False) -> None:
         f"{'DRY-RUN' if dry_run else 'LIVE 🔴'}"
     )
     logger.info(
-        f"move≥{ENTRY_MOVE_CENTS}¢  SL=-{STOP_LOSS_PCT:.0%}  SG=+{STOP_GAIN_PCT:.0%}  "
+        f"move≥{ENTRY_MOVE_PCT:.0%}  min≥{MIN_ENTRY_CENTS}¢  confirm={CONFIRM_SECS}s  "
+        f"SL=-{STOP_LOSS_PCT:.0%}  SG=+{STOP_GAIN_PCT:.0%}  "
         f"watch={WATCH_MINUTES}m  exit@{EXIT_BEFORE_CLOSE}m-left  "
         f"size={POSITION_PCT:.0%}  min=${MIN_TRADE_USD}"
     )
