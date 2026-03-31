@@ -47,14 +47,15 @@ logger = logging.getLogger("btc15m")
 # ── Tunable parameters ────────────────────────────────────────────────────────
 ENTRY_MOVE_PCT     = 0.15  # Enter on ≥15% relative move from cycle-open reference
 MIN_ENTRY_CENTS    = 40    # Only buy a side when it's priced ≥40¢ (avoid noise)
+MAX_ENTRY_CENTS    = 58    # Don't buy a side above 58¢ — avoid chasing exhausted moves
 CONFIRM_SECS       = 2.0   # Price must hold above threshold this long before entry
-STOP_LOSS_PCT      = 0.10  # Exit if position loses 10% of invested capital
+STOP_LOSS_PCT      = 0.15  # Exit if position loses 15% of invested capital
 STOP_GAIN_PCT      = 0.10  # Exit if position gains 10% of invested capital
 WATCH_MINUTES      = 10    # Watch the first N minutes of each 15-min cycle
 EXIT_BEFORE_CLOSE  = 5     # Sell out this many minutes before cycle close
 POSITION_PCT       = 0.80  # 80% of available cash per trade
 MIN_TRADE_USD      = 2.00  # Skip if trade cost is below this
-REENTRY_COOLDOWN_S = 30    # Wait after stop loss before re-entry
+REENTRY_COOLDOWN_S = 60    # Wait after exit before re-entry
 
 # REST fallback: no artificial sleep — purely HTTP-latency limited
 REST_POLL_SLEEP    = 0.0
@@ -435,7 +436,7 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
     remaining = (close_time - datetime.now(timezone.utc)).total_seconds()
     logger.info(
         f"━━━ WINDOW OPEN ━━━  {ticker}  |  {remaining:.0f}s  |  "
-        f"move≥{ENTRY_MOVE_PCT:.0%}  min≥{MIN_ENTRY_CENTS}¢  confirm={CONFIRM_SECS}s  "
+        f"move≥{ENTRY_MOVE_PCT:.0%}  entry={MIN_ENTRY_CENTS}-{MAX_ENTRY_CENTS}¢  confirm={CONFIRM_SECS}s  "
         f"SL=-{STOP_LOSS_PCT:.0%}  SG=+{STOP_GAIN_PCT:.0%}  exit@{EXIT_BEFORE_CLOSE}m-left"
     )
 
@@ -545,9 +546,11 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
 
                 # Determine which side (if any) has a qualifying signal
                 raw_side = ""
-                if move_pct >= ENTRY_MOVE_PCT and yes_px >= MIN_ENTRY_CENTS:
+                if (move_pct >= ENTRY_MOVE_PCT
+                        and MIN_ENTRY_CENTS <= yes_px <= MAX_ENTRY_CENTS):
                     raw_side = "yes"
-                elif move_pct <= -ENTRY_MOVE_PCT and no_px >= MIN_ENTRY_CENTS:
+                elif (move_pct <= -ENTRY_MOVE_PCT
+                        and MIN_ENTRY_CENTS <= no_px <= MAX_ENTRY_CENTS):
                     raw_side = "no"
 
                 # Track confirmation — signal must hold for CONFIRM_SECS
@@ -640,7 +643,7 @@ def run(client: KalshiClient, dry_run: bool = False) -> None:
         f"{'DRY-RUN' if dry_run else 'LIVE 🔴'}"
     )
     logger.info(
-        f"move≥{ENTRY_MOVE_PCT:.0%}  min≥{MIN_ENTRY_CENTS}¢  confirm={CONFIRM_SECS}s  "
+        f"move≥{ENTRY_MOVE_PCT:.0%}  entry={MIN_ENTRY_CENTS}-{MAX_ENTRY_CENTS}¢  confirm={CONFIRM_SECS}s  "
         f"SL=-{STOP_LOSS_PCT:.0%}  SG=+{STOP_GAIN_PCT:.0%}  "
         f"watch={WATCH_MINUTES}m  exit@{EXIT_BEFORE_CLOSE}m-left  "
         f"size={POSITION_PCT:.0%}  min=${MIN_TRADE_USD}"
