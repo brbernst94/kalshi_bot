@@ -269,8 +269,23 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
         move_pct = (btc_now - btc_open) / btc_open   # +ve = BTC up
 
         if holding:
-            # Poll Kalshi price every 5s and exit if down 50% from entry
             secs = (close_time - now).total_seconds()
+
+            # ── BTC backup stop: if BTC fully reverses past entry direction ──
+            btc_reversed = (
+                (pos_side == "yes" and move_pct <= 0) or
+                (pos_side == "no"  and move_pct >= 0)
+            )
+            if btc_reversed:
+                logger.info(
+                    f"🛑 BTC STOP  {pos_side.upper()}  btc_move={move_pct*100:+.3f}%  "
+                    f"({secs:.0f}s left) — BTC reversed past flat"
+                )
+                if not dry_run:
+                    _market_sell(client, ticker, pos_side, pos_count)
+                break
+
+            # ── Kalshi price stop: exit if contract loses 50% of entry price ──
             if now.timestamp() - last_stop_check >= 5.0:
                 last_stop_check = now.timestamp()
                 cur_px = _get_kalshi_price(client, ticker)
@@ -278,7 +293,7 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
                     stop_px = pos_kalshi_px * STOP_LOSS_PCT
                     if cur_px <= stop_px:
                         logger.info(
-                            f"🛑 STOP LOSS  {pos_side.upper()}  "
+                            f"🛑 KALSHI STOP  {pos_side.upper()}  "
                             f"entry={pos_kalshi_px}¢  now={cur_px}¢  "
                             f"stop={stop_px:.0f}¢  ({secs:.0f}s left) — exiting"
                         )
