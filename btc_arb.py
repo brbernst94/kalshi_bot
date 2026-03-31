@@ -202,6 +202,11 @@ def _market_buy(client: KalshiClient, ticker: str, side: str, count: int) -> boo
         return True
     except Exception as e:
         logger.error(f"Buy failed: {e}")
+        if hasattr(e, "response") and e.response is not None:
+            try:
+                logger.error(f"Buy error body: {e.response.text}")
+            except Exception:
+                pass
         return False
 
 
@@ -346,6 +351,10 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
                             f"@ ~{kalshi_px}¢  ${cost_usd:.2f}  "
                             f"hold to {close_time.strftime('%H:%M:%S')} UTC"
                         )
+                else:
+                    # Buy failed — stop attempting this cycle to avoid order spam
+                    logger.warning("Order failed — skipping remainder of cycle")
+                    break
 
         time.sleep(0.01)   # 100 Hz — WS push is near-instant
 
