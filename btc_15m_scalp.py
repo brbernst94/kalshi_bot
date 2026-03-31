@@ -497,7 +497,8 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
                     _market_sell(client, ticker, pos_side, pos_count)
                     pnl = (pos_px - pos_entry) * pos_count / 100
                     logger.info(f"   PnL ≈ ${pnl:+.2f}")
-                done = True
+                holding = False
+                done    = True
 
             elif pnl_pct >= STOP_GAIN_PCT:
                 logger.info(
@@ -508,7 +509,8 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
                     _market_sell(client, ticker, pos_side, pos_count)
                     pnl = (pos_px - pos_entry) * pos_count / 100
                     logger.info(f"   PnL ≈ ${pnl:+.2f}")
-                done = True
+                holding = False
+                done    = True
 
             elif pnl_pct <= -STOP_LOSS_PCT:
                 logger.info(
@@ -669,7 +671,8 @@ def run(client: KalshiClient, dry_run: bool = False) -> None:
         )
 
         scalp_window(client, ticker, market_close, window_end, dry_run=dry_run)
-        time.sleep(5)   # avoid clock-edge race before next_close() recalculates
+        # Sleep until the cycle actually closes so we never re-enter the same market
+        _sleep_until(close_time + timedelta(seconds=5))
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
