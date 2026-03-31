@@ -252,8 +252,9 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
     holding    = False
     pos_side   = ""
     pos_count  = 0
-    pos_entry_btc  = 0.0   # BTC move% when we entered (for logging)
-    pos_kalshi_px  = 0     # Kalshi price at entry
+    pos_entry_btc  = 0.0
+    pos_kalshi_px  = 0
+    last_stop_check = 0.0   # unix timestamp of last stop-loss price poll
 
     while not _stop_flag.is_set():
         now = datetime.now(timezone.utc)
@@ -270,7 +271,8 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
         if holding:
             # Poll Kalshi price every 5s and exit if down 50% from entry
             secs = (close_time - now).total_seconds()
-            if int(now.timestamp()) % 5 == 0:
+            if now.timestamp() - last_stop_check >= 5.0:
+                last_stop_check = now.timestamp()
                 cur_px = _get_kalshi_price(client, ticker)
                 if cur_px is not None:
                     stop_px = pos_kalshi_px * STOP_LOSS_PCT
