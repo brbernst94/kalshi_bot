@@ -1,1 +1,1 @@
-worker: python btc_15m_scalp.py
+worker: python btc_arb.py
