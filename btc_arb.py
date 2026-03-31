@@ -238,10 +238,10 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
     """
     no_entry_after = close_time - timedelta(seconds=NO_ENTRY_FINAL_S)
     secs_total     = (close_time - datetime.now(timezone.utc)).total_seconds()
+    exit_str       = f"exit<{BTC_EXIT_PCT*100:.2f}%" if BTC_EXIT_PCT is not None else "hold-to-res"
     logger.info(
         f"━━━ CYCLE  {ticker}  closes {close_time.strftime('%H:%M:%S')} UTC  "
-        f"({secs_total:.0f}s)  entry≥{BTC_ENTRY_PCT*100:.2f}%  "
-        f"exit<{BTC_EXIT_PCT*100:.2f}%"
+        f"({secs_total:.0f}s)  entry≥{BTC_ENTRY_PCT*100:.2f}%  {exit_str}"
     )
 
     holding    = False
