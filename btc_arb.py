@@ -415,14 +415,16 @@ def run(client: KalshiClient, dry_run: bool = False) -> None:
         if _stop_flag.is_set():
             break
 
-        # Find the market (retry up to 3x — occasionally takes a moment to open)
+        # Find the market — retry up to 12x with 5s gaps (60s total).
+        # Kalshi sometimes takes 15-30s to open the next market after close.
         result = None
-        for attempt in range(3):
+        for attempt in range(12):
             result = find_market(client)
             if result:
                 break
-            logger.warning(f"No KXBTC15M market found (attempt {attempt+1}/3) — retrying in 5s")
-            time.sleep(5)
+            if attempt < 11:
+                logger.warning(f"No KXBTC15M market found (attempt {attempt+1}/12) — retrying in 5s")
+                time.sleep(5)
 
         if not result:
             logger.warning("Skipping cycle — no open market found")
