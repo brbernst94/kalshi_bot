@@ -58,7 +58,7 @@ WATCH_MINUTES      = 10    # Watch the first N minutes of each 15-min cycle
 EXIT_BEFORE_CLOSE  = 5     # Sell out this many minutes before cycle close
 POSITION_PCT       = 0.80  # 80% of available cash per trade
 MIN_TRADE_USD      = 2.00  # Skip if trade cost is below this
-REENTRY_COOLDOWN_S = 60    # Wait after exit before re-entry
+REENTRY_COOLDOWN_S = 10    # Wait after exit before re-entry
 
 # REST fallback: no artificial sleep — purely HTTP-latency limited
 REST_POLL_SLEEP    = 0.0
