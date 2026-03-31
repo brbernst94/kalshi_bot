@@ -32,6 +32,127 @@ TAKER_SPREAD_EST   = 5      # estimated round-trip spread cost in cents
 
 # ── Binance ───────────────────────────────────────────────────────────────────
 
+def binance_1m_candles(open_ts_ms: int) -> list:
+    """
+    Fetch 15 x 1-minute BTCUSDT klines covering the full 15-min window.
+    Returns list of {open, close, ts_ms} dicts, or [] on error.
+    """
+    url = (
+        "https://api.binance.com/api/v3/klines"
+        f"?symbol=BTCUSDT&interval=1m&startTime={open_ts_ms}&limit=15"
+    )
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "btc-research/1.0"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            data = json.loads(r.read())
+        return [{"ts_ms": int(k[0]), "open": float(k[1]), "close": float(k[4])} for k in data]
+    except Exception as e:
+        log.warning(f"Binance 1m fetch failed: {e}")
+        return []
+
+
+def simulate_single_trade(candles: list, candle_open: float,
+                           entry_pct: float, exit_pct: float,
+                           resolves_yes: bool) -> dict:
+    """
+    Strategy A: tied to candle open, one trade per cycle.
+    Enter when BTC moves ±entry_pct from open. Hold to resolution unless
+    BTC reverses past -exit_pct (against position). Returns trade result.
+    """
+    ref   = candle_open
+    side  = None   # "yes" or "no"
+
+    for c in candles:
+        price = c["close"]
+        move  = (price - ref) / ref
+
+        if side is None:
+            if move >= entry_pct:
+                side = "yes"
+            elif move <= -entry_pct:
+                side = "no"
+        else:
+            # Check reversal exit
+            if side == "yes" and move <= -exit_pct:
+                # Exited early — BTC reversed against us
+                # Kalshi price has also reversed — rough loss
+                win = False
+                return {"trades": 1, "result": "reversed_exit", "win": win,
+                        "btc_final": (candles[-1]["close"] - candle_open) / candle_open}
+            elif side == "no" and move >= exit_pct:
+                win = False
+                return {"trades": 1, "result": "reversed_exit", "win": win,
+                        "btc_final": (candles[-1]["close"] - candle_open) / candle_open}
+
+    if side is None:
+        return {"trades": 0, "result": "no_entry", "win": None,
+                "btc_final": (candles[-1]["close"] - candle_open) / candle_open}
+
+    # Held to resolution
+    win = (side == "yes") == resolves_yes
+    return {"trades": 1, "result": "resolution", "win": win,
+            "btc_final": (candles[-1]["close"] - candle_open) / candle_open}
+
+
+def simulate_reentry(candles: list, candle_open: float,
+                     entry_pct: float, exit_pct: float,
+                     resolves_yes: bool) -> dict:
+    """
+    Strategy B: re-entry after reversal, both directions.
+    After a reversal exit, reset reference to current price and watch for
+    a fresh ±entry_pct move in either direction.
+    """
+    ref     = candle_open
+    side    = None
+    trades  = 0
+    wins    = 0
+    losses  = 0
+    results = []
+
+    for c in candles:
+        price = c["close"]
+        move  = (price - ref) / ref
+
+        if side is None:
+            if move >= entry_pct:
+                side = "yes"
+                trades += 1
+            elif move <= -entry_pct:
+                side = "no"
+                trades += 1
+        else:
+            reversed_out = (
+                (side == "yes" and move <= -exit_pct) or
+                (side == "no"  and move >= exit_pct)
+            )
+            if reversed_out:
+                losses += 1
+                results.append(f"{side}_loss")
+                # Reset reference to current price, watch for new signal
+                ref  = price
+                side = None
+
+    # Resolve any open position
+    if side is not None:
+        win = (side == "yes") == resolves_yes
+        if win:
+            wins += 1
+            results.append(f"{side}_win")
+        else:
+            losses += 1
+            results.append(f"{side}_loss")
+
+    total = wins + losses
+    return {
+        "trades":  trades,
+        "wins":    wins,
+        "losses":  losses,
+        "win_pct": wins / total if total > 0 else None,
+        "results": results,
+        "btc_final": (candles[-1]["close"] - candle_open) / candle_open,
+    }
+
+
 def binance_kline(open_ts_ms: int) -> Optional[dict]:
     """
     Fetch a single 15m BTCUSDT kline from Binance public API.
@@ -161,8 +282,11 @@ def analyse(client: KalshiClient, n: int = 50) -> None:
         if kalshi_open_px is None:
             kalshi_open_px = _pc(m, "last_price") or _pc(m, "yes_ask") or _pc(m, "yes_bid")
 
-        btc_up = kline["pct"] > 0   # BTC closed higher than it opened
+        btc_up  = kline["pct"] > 0
         yes_won = (result == "yes")
+
+        # Fetch 1-minute intra-candle data for simulation
+        candles_1m = binance_1m_candles(open_ts_ms)
 
         records.append({
             "ticker":          ticker,
@@ -175,6 +299,7 @@ def analyse(client: KalshiClient, n: int = 50) -> None:
             "btc_close":       kline["close"],
             "btc_vol":         kline["volume"],
             "kalshi_open_px":  kalshi_open_px,
+            "candles_1m":      candles_1m,
         })
         time.sleep(0.05)   # be gentle with Binance rate limit
 
@@ -335,6 +460,84 @@ def analyse(client: KalshiClient, n: int = 50) -> None:
     print("   3. Hold to resolution when confident — avoids round-trip spread")
     print("      cost (saves ~5¢ vs intraday exit on a 10¢ move)")
     print("   4. Size larger when BTC volume is high (more predictable outcome)")
+    print()
+
+    # ── Section 8: Strategy A — tied to open, 1 trade per cycle ─────────────
+    print(f"{'─'*60}")
+    print("8. SIMULATION A — TIED TO OPEN, 1 TRADE PER CYCLE")
+    print(f"{'─'*60}")
+    sim_records = [r for r in records if r["candles_1m"]]
+    print(f"   Markets with 1m data: {len(sim_records)}")
+
+    ENTRY_PCT = 0.001   # 0.1% trigger
+    EXIT_PCT  = 0.001   # -0.1% reversal exit
+
+    a_trades = a_wins = a_losses = a_no_entry = a_reversed = 0
+    for r in sim_records:
+        res = simulate_single_trade(
+            r["candles_1m"], r["btc_open"], ENTRY_PCT, EXIT_PCT, r["yes_won"]
+        )
+        if res["trades"] == 0:
+            a_no_entry += 1
+        elif res["result"] == "reversed_exit":
+            a_reversed += 1
+            a_losses   += 1
+            a_trades   += 1
+        else:
+            a_trades += 1
+            if res["win"]:
+                a_wins += 1
+            else:
+                a_losses += 1
+
+    a_total = a_wins + a_losses
+    print(f"   Total entries:    {a_trades}")
+    print(f"   No-entry cycles:  {a_no_entry}  (BTC never moved 0.1%)")
+    print(f"   Reversed exits:   {a_reversed}")
+    print(f"   Win rate:         {a_wins}/{a_total}  ({100*a_wins/a_total:.1f}%)" if a_total else "   No trades")
+
+    if a_total:
+        entry_px = 50
+        ev_w = (100 - entry_px) / 100 * (1 - SETTLEMENT_FEE_PCT)
+        ev_l = -entry_px / 100
+        wr   = a_wins / a_total
+        net  = wr * ev_w + (1 - wr) * ev_l
+        print(f"   EV at 50¢ entry:  {net:+.3f} per $1 risked")
+    print()
+
+    # ── Section 9: Strategy B — re-entry after reversal, both directions ─────
+    print(f"{'─'*60}")
+    print("9. SIMULATION B — RE-ENTRY AFTER REVERSAL, BOTH DIRECTIONS")
+    print(f"{'─'*60}")
+
+    b_total_trades = b_total_wins = b_total_losses = 0
+    b_cycles_traded = 0
+    b_trades_per_cycle = []
+
+    for r in sim_records:
+        res = simulate_reentry(
+            r["candles_1m"], r["btc_open"], ENTRY_PCT, EXIT_PCT, r["yes_won"]
+        )
+        if res["trades"] > 0:
+            b_cycles_traded    += 1
+            b_total_trades     += res["trades"]
+            b_total_wins       += res["wins"]
+            b_total_losses     += res["losses"]
+            b_trades_per_cycle.append(res["trades"])
+
+    b_total = b_total_wins + b_total_losses
+    avg_trades = sum(b_trades_per_cycle) / len(b_trades_per_cycle) if b_trades_per_cycle else 0
+    print(f"   Cycles traded:     {b_cycles_traded}")
+    print(f"   Total trades:      {b_total_trades}  (avg {avg_trades:.1f}/cycle)")
+    print(f"   Win rate:          {b_total_wins}/{b_total}  ({100*b_total_wins/b_total:.1f}%)" if b_total else "   No trades")
+
+    if b_total:
+        wr  = b_total_wins / b_total
+        net = wr * ev_w + (1 - wr) * ev_l
+        print(f"   EV at 50¢ entry:   {net:+.3f} per $1 risked")
+        print()
+        print(f"   vs Strategy A:     {b_total_trades - a_trades:+d} extra trades, "
+              f"win rate {100*b_total_wins/b_total:.1f}% vs {100*a_wins/a_total:.1f}%")
     print()
 
     # ── Raw data summary ──────────────────────────────────────────────────────
