@@ -459,12 +459,11 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
     pos_count  = 0
     pos_entry  = 0
     last_sl_ts = 0.0
-    done       = False
 
     ticks   = 0
     t_start = time.time()
 
-    while not _stop_flag.is_set() and not done:
+    while not _stop_flag.is_set():
         now = datetime.now(timezone.utc)
         if now >= close_time:
             break
@@ -498,19 +497,20 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
                     pnl = (pos_px - pos_entry) * pos_count / 100
                     logger.info(f"   PnL ≈ ${pnl:+.2f}")
                 holding = False
-                done    = True
+                break
 
             elif pnl_pct >= STOP_GAIN_PCT:
                 logger.info(
                     f"🎯 STOP GAIN  {pos_side.upper()} x{pos_count} "
-                    f"@ {pos_px}¢  ({pnl_pct:+.1%})  ({secs:.0f}s left)"
+                    f"@ {pos_px}¢  ({pnl_pct:+.1%})  ({secs:.0f}s left) — watching for re-entry"
                 )
                 if not dry_run:
                     _market_sell(client, ticker, pos_side, pos_count)
                     pnl = (pos_px - pos_entry) * pos_count / 100
                     logger.info(f"   PnL ≈ ${pnl:+.2f}")
-                holding = False
-                done    = True
+                holding    = False
+                last_sl_ts = time.time()
+                ref_price  = yes_px  # reset reference for next entry signal
 
             elif pnl_pct <= -STOP_LOSS_PCT:
                 logger.info(
@@ -605,10 +605,6 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
         )
         if not dry_run:
             _market_sell(client, ticker, pos_side, pos_count)
-    elif done:
-        logger.info(
-            f"━━━ WINDOW CLOSED ━━━  Exited ✓  [{ticks} ticks @ {hz:.0f} Hz]"
-        )
     else:
         logger.info(
             f"━━━ WINDOW CLOSED ━━━  No position  [{ticks} ticks @ {hz:.0f} Hz]"
