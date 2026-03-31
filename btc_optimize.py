@@ -38,20 +38,19 @@ TAKER_SPREAD_CENTS = 5    # estimated round-trip cost for market orders
 
 # Kalshi price model: estimated YES price when BTC has moved X% from open
 # Based on market behavior — larger BTC moves → higher certainty → higher price
-def kalshi_price_model(btc_move_abs_pct: float) -> int:
+def kalshi_price_model(btc_move_abs: float) -> int:
     """
-    Realistic Kalshi YES (or NO) price at the moment of entry.
-    Kalshi reprices within seconds of a BTC move — by the time the
-    signal fires and the order hits, the market has already moved.
-    Prices here reflect what you'd realistically pay, not the neutral 50¢.
+    Realistic Kalshi YES/NO price given a BTC move in decimal form (0.002 = 0.2%).
+    Kalshi reprices within seconds — by the time your order fires, the market
+    has already partially moved. These reflect realistic fill prices.
     """
-    if btc_move_abs_pct < 0.05:  return 52   # barely moved, near neutral
-    if btc_move_abs_pct < 0.10:  return 58   # slight edge, market starting to move
-    if btc_move_abs_pct < 0.15:  return 64   # clear direction, market repricing
-    if btc_move_abs_pct < 0.20:  return 69   # strong move, well priced in
-    if btc_move_abs_pct < 0.30:  return 74   # very strong, expensive
-    if btc_move_abs_pct < 0.50:  return 80   # near certain direction
-    return 86                                 # extreme move
+    if btc_move_abs < 0.0005:  return 52   # 0.05% — barely moved
+    if btc_move_abs < 0.0010:  return 57   # 0.10% — slight edge
+    if btc_move_abs < 0.0015:  return 63   # 0.15% — clear direction
+    if btc_move_abs < 0.0020:  return 68   # 0.20% — well priced in
+    if btc_move_abs < 0.0030:  return 73   # 0.30% — strong move
+    if btc_move_abs < 0.0050:  return 79   # 0.50% — near certain
+    return 85                              # 0.50%+ — extreme move
 
 
 # ── Binance data ──────────────────────────────────────────────────────────────
@@ -177,24 +176,26 @@ def trade_multiplier(trade: dict) -> float:
     return 1.0 + POSITION_PCT * roi
 
 
-def geometric_daily_growth(win_rate: float, avg_entry_px: float,
-                            trades_per_cycle: float) -> float:
+def flat_daily_pnl_pct(win_rate: float, avg_entry_px: float,
+                       trades_per_cycle: float) -> float:
     """
-    Project daily bankroll growth using geometric compounding.
-    Includes taker spread cost and settlement fee.
-    Each trade: win → multiplier_win, lose → multiplier_lose
+    Project daily P&L as a fraction of a fixed starting bankroll (no compounding).
+    Uses arithmetic expected value × trades per day.
+    This avoids the astronomical compounding blowup from high win rates.
+
+    win_pnl / lose_pnl in cents per 100¢ contract (includes spread + fee).
+    POSITION_PCT fraction of bankroll is risked per trade.
     """
-    # Subtract spread cost from both win and loss outcomes
-    win_pnl  = (100 - avg_entry_px) * (1 - SETTLEMENT_FEE) - TAKER_SPREAD_CENTS
-    lose_pnl = -avg_entry_px - TAKER_SPREAD_CENTS
-    m_win    = 1.0 + POSITION_PCT * win_pnl  / avg_entry_px
-    m_lose   = 1.0 + POSITION_PCT * lose_pnl / avg_entry_px
-    if m_lose <= 0:
-        return -1.0   # ruin — can't lose more than bankroll
-    # Geometric mean per trade
-    geo_per_trade = (m_win ** win_rate) * (m_lose ** (1 - win_rate))
+    win_pnl       = (100 - avg_entry_px) * (1 - SETTLEMENT_FEE) - TAKER_SPREAD_CENTS
+    lose_pnl      = -avg_entry_px - TAKER_SPREAD_CENTS
+    ev_cents      = win_rate * win_pnl + (1 - win_rate) * lose_pnl
+    roi_per_trade = (ev_cents / avg_entry_px) * POSITION_PCT   # fraction of bankroll
     trades_per_day = trades_per_cycle * CYCLES_PER_DAY
-    return geo_per_trade ** trades_per_day - 1.0
+    return roi_per_trade * trades_per_day
+
+
+# Keep old name as alias for the break-even analysis helper below
+geometric_daily_growth = flat_daily_pnl_pct
 
 
 # ── Kalshi market helpers ─────────────────────────────────────────────────────
@@ -288,7 +289,7 @@ def run(client: KalshiClient, n: int = 50) -> None:
         trades_p_cyc  = total / len(dataset)   # avg trades per 15-min cycle
         trade_freq    = cycles_traded / len(dataset)
 
-        daily = geometric_daily_growth(win_rate, avg_entry_px, trades_p_cyc)
+        daily = flat_daily_pnl_pct(win_rate, avg_entry_px, trades_p_cyc)
 
         # Arithmetic EV per $1 risked (for comparison)
         win_pay  = (100 - avg_entry_px) * (1 - SETTLEMENT_FEE) / avg_entry_px
@@ -313,8 +314,8 @@ def run(client: KalshiClient, n: int = 50) -> None:
     results.sort(key=lambda x: x["daily_growth"], reverse=True)
 
     print(f"\n{'='*78}")
-    print("TOP 20 STRATEGIES — ranked by projected daily growth (80% size, 5¢ spread)")
-    print("NOTE: projections >1000%/day indicate model uncertainty, not real returns")
+    print("TOP 20 STRATEGIES — ranked by flat daily P&L (80% size, 5¢ spread, no compounding)")
+    print("Daily % = arithmetic EV × trades/day on fixed starting bankroll")
     print(f"{'='*78}")
     print(f"  {'Entry%':>7} {'MaxMin':>7} {'RevExit':>8} {'ReEnt':>6} | "
           f"{'WinRate':>8} {'Trades/d':>9} {'AvgPx':>7} | "
@@ -352,14 +353,14 @@ def run(client: KalshiClient, n: int = 50) -> None:
     print(f"  Projected daily:  {best['daily_growth']:+.1%}")
     print()
 
-    # Simulate dollar growth over 1 day
+    # Simulate dollar growth (flat — fixed $100 base, no reinvestment)
     bankroll = 100.0
-    geo = (1 + best["daily_growth"])
-    print(f"  $100 compounded:")
-    print(f"    After  1 day:   ${bankroll * geo:.2f}")
-    print(f"    After  3 days:  ${bankroll * geo**3:.2f}")
-    print(f"    After  7 days:  ${bankroll * geo**7:.2f}")
-    print(f"    After 30 days:  ${bankroll * geo**30:.2f}")
+    dpnl = best["daily_growth"]
+    print(f"  $100 flat (no reinvestment):")
+    print(f"    After  1 day:   ${bankroll + bankroll*dpnl*1:.2f}  ({dpnl:+.1%}/day)")
+    print(f"    After  3 days:  ${bankroll + bankroll*dpnl*3:.2f}")
+    print(f"    After  7 days:  ${bankroll + bankroll*dpnl*7:.2f}")
+    print(f"    After 30 days:  ${bankroll + bankroll*dpnl*30:.2f}")
     print()
 
     # Target check
