@@ -254,7 +254,8 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
     pos_count  = 0
     pos_entry_btc  = 0.0
     pos_kalshi_px  = 0
-    last_stop_check = 0.0   # unix timestamp of last stop-loss price poll
+    last_stop_check = 0.0
+    exited_early    = False
 
     while not _stop_flag.is_set():
         now = datetime.now(timezone.utc)
@@ -271,18 +272,21 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
         if holding:
             secs = (close_time - now).total_seconds()
 
-            # ── BTC backup stop: if BTC fully reverses past entry direction ──
+            # ── BTC backup stop: BTC reversed past entry threshold (other side)
+            # e.g. entered YES at +0.15% → stop if BTC drops to -0.15%
+            # This approximates a ~50% Kalshi loss without needing an API call.
             btc_reversed = (
-                (pos_side == "yes" and move_pct <= 0) or
-                (pos_side == "no"  and move_pct >= 0)
+                (pos_side == "yes" and move_pct <= -BTC_ENTRY_PCT) or
+                (pos_side == "no"  and move_pct >=  BTC_ENTRY_PCT)
             )
             if btc_reversed:
                 logger.info(
                     f"🛑 BTC STOP  {pos_side.upper()}  btc_move={move_pct*100:+.3f}%  "
-                    f"({secs:.0f}s left) — BTC reversed past flat"
+                    f"({secs:.0f}s left) — BTC reversed past -{BTC_ENTRY_PCT*100:.2f}%"
                 )
                 if not dry_run:
                     _market_sell(client, ticker, pos_side, pos_count)
+                exited_early = True
                 break
 
             # ── Kalshi price stop: exit if contract loses 50% of entry price ──
@@ -299,6 +303,7 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
                         )
                         if not dry_run:
                             _market_sell(client, ticker, pos_side, pos_count)
+                        exited_early = True
                         break
 
         else:
@@ -374,7 +379,7 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
     btc_open, btc_final, _ = feed.get_state()
     final_move = ((btc_final - btc_open) / btc_open * 100) if btc_open and btc_final else 0.0
 
-    if holding:
+    if holding and not exited_early:
         logger.info(
             f"━━━ HOLDING to resolution  {pos_side.upper()} x{pos_count} "
             f"@ ~{pos_kalshi_px}¢  |  final BTC move={final_move:+.3f}%"
