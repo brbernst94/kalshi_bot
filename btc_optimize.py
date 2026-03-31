@@ -29,17 +29,29 @@ SETTLEMENT_FEE  = 0.07    # Kalshi takes 7% of winnings at resolution
 POSITION_PCT    = 0.80    # fraction of bankroll per trade
 CYCLES_PER_DAY  = 96      # 15-min cycles in 24 hours
 
+# Realistic constraints the naive model ignores:
+#  - Kalshi reprices within ~5-15s of a BTC move (other bots exist)
+#  - Taker spread: ~4-6¢ round-trip on market orders
+#  - Not every cycle has a trade (low-volatility windows)
+#  - 50-market sample is small — treat win rates with skepticism
+TAKER_SPREAD_CENTS = 5    # estimated round-trip cost for market orders
+
 # Kalshi price model: estimated YES price when BTC has moved X% from open
 # Based on market behavior — larger BTC moves → higher certainty → higher price
 def kalshi_price_model(btc_move_abs_pct: float) -> int:
-    """Estimate Kalshi YES (or NO) price in cents at the moment of entry."""
-    if btc_move_abs_pct < 0.05:  return 51
-    if btc_move_abs_pct < 0.10:  return 53
-    if btc_move_abs_pct < 0.15:  return 56
-    if btc_move_abs_pct < 0.20:  return 59
-    if btc_move_abs_pct < 0.30:  return 63
-    if btc_move_abs_pct < 0.50:  return 68
-    return 74
+    """
+    Realistic Kalshi YES (or NO) price at the moment of entry.
+    Kalshi reprices within seconds of a BTC move — by the time the
+    signal fires and the order hits, the market has already moved.
+    Prices here reflect what you'd realistically pay, not the neutral 50¢.
+    """
+    if btc_move_abs_pct < 0.05:  return 52   # barely moved, near neutral
+    if btc_move_abs_pct < 0.10:  return 58   # slight edge, market starting to move
+    if btc_move_abs_pct < 0.15:  return 64   # clear direction, market repricing
+    if btc_move_abs_pct < 0.20:  return 69   # strong move, well priced in
+    if btc_move_abs_pct < 0.30:  return 74   # very strong, expensive
+    if btc_move_abs_pct < 0.50:  return 80   # near certain direction
+    return 86                                 # extreme move
 
 
 # ── Binance data ──────────────────────────────────────────────────────────────
@@ -169,12 +181,16 @@ def geometric_daily_growth(win_rate: float, avg_entry_px: float,
                             trades_per_cycle: float) -> float:
     """
     Project daily bankroll growth using geometric compounding.
+    Includes taker spread cost and settlement fee.
     Each trade: win → multiplier_win, lose → multiplier_lose
     """
-    win_pnl  =  (100 - avg_entry_px) * (1 - SETTLEMENT_FEE)
-    lose_pnl = -avg_entry_px
+    # Subtract spread cost from both win and loss outcomes
+    win_pnl  = (100 - avg_entry_px) * (1 - SETTLEMENT_FEE) - TAKER_SPREAD_CENTS
+    lose_pnl = -avg_entry_px - TAKER_SPREAD_CENTS
     m_win    = 1.0 + POSITION_PCT * win_pnl  / avg_entry_px
     m_lose   = 1.0 + POSITION_PCT * lose_pnl / avg_entry_px
+    if m_lose <= 0:
+        return -1.0   # ruin — can't lose more than bankroll
     # Geometric mean per trade
     geo_per_trade = (m_win ** win_rate) * (m_lose ** (1 - win_rate))
     trades_per_day = trades_per_cycle * CYCLES_PER_DAY
@@ -297,7 +313,8 @@ def run(client: KalshiClient, n: int = 50) -> None:
     results.sort(key=lambda x: x["daily_growth"], reverse=True)
 
     print(f"\n{'='*78}")
-    print("TOP 20 STRATEGIES — ranked by projected daily growth (80% position size)")
+    print("TOP 20 STRATEGIES — ranked by projected daily growth (80% size, 5¢ spread)")
+    print("NOTE: projections >1000%/day indicate model uncertainty, not real returns")
     print(f"{'='*78}")
     print(f"  {'Entry%':>7} {'MaxMin':>7} {'RevExit':>8} {'ReEnt':>6} | "
           f"{'WinRate':>8} {'Trades/d':>9} {'AvgPx':>7} | "
