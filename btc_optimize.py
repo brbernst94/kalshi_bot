@@ -13,6 +13,7 @@ Usage:
 import argparse
 import json
 import logging
+import math
 import time
 import urllib.request
 from datetime import datetime, timezone
@@ -38,19 +39,38 @@ TAKER_SPREAD_CENTS = 5    # estimated round-trip cost for market orders
 
 # Kalshi price model: estimated YES price when BTC has moved X% from open
 # Based on market behavior — larger BTC moves → higher certainty → higher price
-def kalshi_price_model(btc_move_abs: float) -> int:
+def kalshi_price_model(btc_move_abs: float, minutes_elapsed: int = 7) -> int:
     """
-    Realistic Kalshi YES/NO price given a BTC move in decimal form (0.002 = 0.2%).
-    Kalshi reprices within seconds — by the time your order fires, the market
-    has already partially moved. These reflect realistic fill prices.
+    Realistic Kalshi YES/NO price given:
+      - btc_move_abs    : BTC move from open in decimal form (0.002 = 0.2%)
+      - minutes_elapsed : how many minutes into the 15-min cycle
+
+    Two drivers:
+      1. Move size — larger move → market reprices higher
+      2. Time elapsed — later in cycle → less time uncertainty → price closer to 0/100
+
+    If BTC is up 0.15% with 2 min left, YES is ~83¢ (market knows it's likely done).
+    If BTC is up 0.05% with 14 min left, YES is ~53¢ (plenty of time to reverse).
     """
-    if btc_move_abs < 0.0005:  return 52   # 0.05% — barely moved
-    if btc_move_abs < 0.0010:  return 57   # 0.10% — slight edge
-    if btc_move_abs < 0.0015:  return 63   # 0.15% — clear direction
-    if btc_move_abs < 0.0020:  return 68   # 0.20% — well priced in
-    if btc_move_abs < 0.0030:  return 73   # 0.30% — strong move
-    if btc_move_abs < 0.0050:  return 79   # 0.50% — near certain
-    return 85                              # 0.50%+ — extreme move
+    # Base price from BTC move magnitude
+    if btc_move_abs < 0.0005:  base = 52
+    elif btc_move_abs < 0.0010: base = 57
+    elif btc_move_abs < 0.0015: base = 63
+    elif btc_move_abs < 0.0020: base = 68
+    elif btc_move_abs < 0.0030: base = 73
+    elif btc_move_abs < 0.0050: base = 79
+    else:                       base = 85
+
+    # Time-remaining premium: less time left → market prices out uncertainty
+    mins_remaining = max(0, 15 - minutes_elapsed)
+    if   mins_remaining <= 1:  time_adj = +18
+    elif mins_remaining <= 2:  time_adj = +13
+    elif mins_remaining <= 3:  time_adj = +9
+    elif mins_remaining <= 5:  time_adj = +5
+    elif mins_remaining <= 7:  time_adj = +2
+    else:                      time_adj = 0
+
+    return min(95, base + time_adj)
 
 
 # ── Binance data ──────────────────────────────────────────────────────────────
@@ -120,10 +140,10 @@ def simulate(candles_1m: list, btc_open: float, yes_won: bool,
                 break
             if move >= entry_pct:
                 side = "yes"
-                trades.append({"entry_px": kalshi_price_model(abs(move)), "side": side, "status": "open"})
+                trades.append({"entry_px": kalshi_price_model(abs(move), minute), "side": side, "status": "open"})
             elif move <= -entry_pct:
                 side = "no"
-                trades.append({"entry_px": kalshi_price_model(abs(move)), "side": side, "status": "open"})
+                trades.append({"entry_px": kalshi_price_model(abs(move), minute), "side": side, "status": "open"})
 
         elif reversal_pct is not None:
             reversed_out = (
@@ -196,6 +216,18 @@ def flat_daily_pnl_pct(win_rate: float, avg_entry_px: float,
 
 # Keep old name as alias for the break-even analysis helper below
 geometric_daily_growth = flat_daily_pnl_pct
+
+
+def wilson_ci(wins: int, n: int, z: float = 1.645) -> tuple:
+    """Wilson score confidence interval (90% by default, z=1.645).
+    Returns (low, high) win rate bounds."""
+    if n == 0:
+        return (0.0, 1.0)
+    p = wins / n
+    denom = 1 + z*z/n
+    centre = (p + z*z/(2*n)) / denom
+    margin = (z * math.sqrt(p*(1-p)/n + z*z/(4*n*n))) / denom
+    return (max(0.0, centre - margin), min(1.0, centre + margin))
 
 
 # ── Kalshi market helpers ─────────────────────────────────────────────────────
@@ -289,7 +321,11 @@ def run(client: KalshiClient, n: int = 50) -> None:
         trades_p_cyc  = total / len(dataset)   # avg trades per 15-min cycle
         trade_freq    = cycles_traded / len(dataset)
 
-        daily = flat_daily_pnl_pct(win_rate, avg_entry_px, trades_p_cyc)
+        wr_lo, wr_hi  = wilson_ci(wins, total)   # 90% CI bounds
+
+        daily         = flat_daily_pnl_pct(win_rate,  avg_entry_px, trades_p_cyc)
+        daily_lo      = flat_daily_pnl_pct(wr_lo,     avg_entry_px, trades_p_cyc)  # pessimistic
+        daily_hi      = flat_daily_pnl_pct(wr_hi,     avg_entry_px, trades_p_cyc)  # optimistic
 
         # Arithmetic EV per $1 risked (for comparison)
         win_pay  = (100 - avg_entry_px) * (1 - SETTLEMENT_FEE) / avg_entry_px
@@ -302,42 +338,49 @@ def run(client: KalshiClient, n: int = 50) -> None:
             "rev_pct":      rev_pct,
             "reentry":      reentry,
             "win_rate":     win_rate,
+            "wr_lo":        wr_lo,
+            "wr_hi":        wr_hi,
             "total_trades": total,
             "trades_p_cyc": trades_p_cyc,
             "trade_freq":   trade_freq,
             "avg_entry_px": avg_entry_px,
             "arith_ev":     arith_ev,
             "daily_growth": daily,
+            "daily_lo":     daily_lo,
+            "daily_hi":     daily_hi,
         })
 
     # ── 3. Rank and print ─────────────────────────────────────────────────────
-    results.sort(key=lambda x: x["daily_growth"], reverse=True)
+    # Rank by pessimistic (lower CI) daily P&L — filters out lucky small samples
+    results.sort(key=lambda x: x["daily_lo"], reverse=True)
 
-    print(f"\n{'='*78}")
-    print("TOP 20 STRATEGIES — ranked by flat daily P&L (80% size, 5¢ spread, no compounding)")
-    print("Daily % = arithmetic EV × trades/day on fixed starting bankroll")
-    print(f"{'='*78}")
-    print(f"  {'Entry%':>7} {'MaxMin':>7} {'RevExit':>8} {'ReEnt':>6} | "
-          f"{'WinRate':>8} {'Trades/d':>9} {'AvgPx':>7} | "
-          f"{'ArithEV':>8} {'DailyGrowth':>12}")
-    print(f"  {'-'*7} {'-'*7} {'-'*8} {'-'*6} | "
-          f"{'-'*8} {'-'*9} {'-'*7} | "
-          f"{'-'*8} {'-'*12}")
+    print(f"\n{'='*90}")
+    print("TOP 20 STRATEGIES — ranked by PESSIMISTIC daily P&L (90% CI lower bound)")
+    print("Prices time-adjusted: late entries cost more. n=50 markets → wide CI on win rate.")
+    print(f"{'='*90}")
+    print(f"  {'Entry%':>7} {'MaxMin':>6} {'RevExit':>8} {'ReEnt':>5} | "
+          f"{'WinRate':>8} {'90%CI':>12} {'Trades/d':>9} {'AvgPx':>7} | "
+          f"{'EV/$':>7} {'Daily(mid)':>11} {'Daily(low)':>11}")
+    print(f"  {'-'*7} {'-'*6} {'-'*8} {'-'*5} | "
+          f"{'-'*8} {'-'*12} {'-'*9} {'-'*7} | "
+          f"{'-'*7} {'-'*11} {'-'*11}")
 
     for r in results[:20]:
         rev_str = f"{r['rev_pct']*100:.2f}%" if r["rev_pct"] else "  none"
+        ci_str  = f"[{r['wr_lo']:.0%},{r['wr_hi']:.0%}]"
         print(
-            f"  {r['entry_pct']*100:>6.3f}% {r['max_min']:>7d} {rev_str:>8} "
-            f"{'yes' if r['reentry'] else 'no':>6} | "
-            f"{r['win_rate']:>8.1%} {r['trades_p_cyc']*CYCLES_PER_DAY:>9.1f} "
+            f"  {r['entry_pct']*100:>6.3f}% {r['max_min']:>6d} {rev_str:>8} "
+            f"{'yes' if r['reentry'] else 'no':>5} | "
+            f"{r['win_rate']:>8.1%} {ci_str:>12} "
+            f"{r['trades_p_cyc']*CYCLES_PER_DAY:>9.1f} "
             f"{r['avg_entry_px']:>7.1f}¢ | "
-            f"{r['arith_ev']:>+8.3f} {r['daily_growth']:>+11.1%}"
+            f"{r['arith_ev']:>+7.3f} {r['daily_growth']:>+10.1%} {r['daily_lo']:>+10.1%}"
         )
 
     # ── 4. Best strategy deep-dive ────────────────────────────────────────────
     best = results[0]
     print(f"\n{'='*78}")
-    print("BEST STRATEGY — DEEP DIVE")
+    print("BEST STRATEGY (by pessimistic CI) — DEEP DIVE")
     print(f"{'='*78}")
     print(f"  Entry trigger:    BTC moves {best['entry_pct']*100:.3f}% from candle open")
     print(f"  Entry window:     first {best['max_min']} minute(s) of cycle")
@@ -345,78 +388,74 @@ def run(client: KalshiClient, n: int = 50) -> None:
     print(f"  Reversal exit:    {rev_str}")
     print(f"  Re-entry:         {'yes' if best['reentry'] else 'no'}")
     print()
-    print(f"  Win rate:         {best['win_rate']:.1%}")
-    print(f"  Avg Kalshi entry: {best['avg_entry_px']:.1f}¢")
+    print(f"  Win rate:         {best['win_rate']:.1%}  "
+          f"(90% CI: [{best['wr_lo']:.1%}, {best['wr_hi']:.1%}]  n={best['total_trades']} trades)")
+    print(f"  Avg Kalshi entry: {best['avg_entry_px']:.1f}¢  (time-adjusted — late entries cost more)")
     print(f"  Trades per day:   {best['trades_p_cyc']*CYCLES_PER_DAY:.1f}  "
           f"(enters {best['trade_freq']:.0%} of cycles)")
     print(f"  Arith EV/trade:   {best['arith_ev']:+.3f} per $1 risked")
-    print(f"  Projected daily:  {best['daily_growth']:+.1%}")
+    print()
+    print(f"  Daily P&L (mid):  {best['daily_growth']:+.1%}   ← point estimate")
+    print(f"  Daily P&L (low):  {best['daily_lo']:+.1%}   ← pessimistic 90% CI  (use this)")
+    print(f"  Daily P&L (high): {best['daily_hi']:+.1%}   ← optimistic 90% CI")
+    print()
+    print(f"  ⚠️  n={best['total_trades']} trades is a small sample. The CI range above shows")
+    print(f"     how sensitive projections are to win-rate uncertainty.")
     print()
 
-    # Simulate dollar growth (flat — fixed $100 base, no reinvestment)
+    # Simulate dollar growth using PESSIMISTIC estimate (flat, no reinvestment)
     bankroll = 100.0
-    dpnl = best["daily_growth"]
-    print(f"  $100 flat (no reinvestment):")
-    print(f"    After  1 day:   ${bankroll + bankroll*dpnl*1:.2f}  ({dpnl:+.1%}/day)")
-    print(f"    After  3 days:  ${bankroll + bankroll*dpnl*3:.2f}")
-    print(f"    After  7 days:  ${bankroll + bankroll*dpnl*7:.2f}")
-    print(f"    After 30 days:  ${bankroll + bankroll*dpnl*30:.2f}")
+    dpnl = best["daily_lo"]   # use conservative estimate
+    dpnl_mid = best["daily_growth"]
+    print(f"  $100 flat — pessimistic ({dpnl:+.1%}/day)  |  mid ({dpnl_mid:+.1%}/day):")
+    print(f"    After  1 day:   ${bankroll + bankroll*dpnl:.2f}  |  ${bankroll + bankroll*dpnl_mid:.2f}")
+    print(f"    After  7 days:  ${bankroll + bankroll*dpnl*7:.2f}  |  ${bankroll + bankroll*dpnl_mid*7:.2f}")
+    print(f"    After 30 days:  ${bankroll + bankroll*dpnl*30:.2f}  |  ${bankroll + bankroll*dpnl_mid*30:.2f}")
     print()
 
-    # Target check
+    # Target check on pessimistic estimate
     target_daily = 0.10
-    if best["daily_growth"] >= target_daily:
-        print(f"  ✅ Meets 10%/day target")
+    if best["daily_lo"] >= target_daily:
+        print(f"  ✅ Meets 10%/day target even at pessimistic CI")
+    elif best["daily_growth"] >= target_daily:
+        print(f"  ⚠️  Meets 10%/day at midpoint but NOT at pessimistic bound")
+        print(f"     More data (>50 markets) needed to confirm the edge is real")
     else:
         needed_wr = None
-        # Find what win rate would hit 10%/day with these params
         for test_wr in [x/100 for x in range(50, 100)]:
-            if geometric_daily_growth(test_wr, best["avg_entry_px"],
-                                      best["trades_p_cyc"]) >= target_daily:
+            if flat_daily_pnl_pct(test_wr, best["avg_entry_px"],
+                                   best["trades_p_cyc"]) >= target_daily:
                 needed_wr = test_wr
                 break
         if needed_wr:
-            print(f"  ⚠️  Best strategy projects {best['daily_growth']:+.1%}/day")
+            print(f"  ⚠️  Best strategy projects {best['daily_growth']:+.1%}/day (mid)")
             print(f"     10%/day requires {needed_wr:.0%} win rate at these params")
-            print(f"     or more trades/cycle")
         print()
 
-    # ── 5. Strategies that hit 10%/day ────────────────────────────────────────
-    hits_target = [r for r in results if r["daily_growth"] >= 0.10]
+    # ── 5. Strategies positive at pessimistic CI ───────────────────────────────
+    robust = [r for r in results if r["daily_lo"] > 0]
+    hits_target = [r for r in results if r["daily_lo"] >= 0.10]
+
+    print(f"{'─'*78}")
+    print(f"STRATEGIES POSITIVE AT PESSIMISTIC 90% CI: {len(robust)}")
     if hits_target:
-        print(f"{'─'*78}")
-        print(f"STRATEGIES PROJECTING ≥10%/DAY: {len(hits_target)}")
-        print(f"{'─'*78}")
-        for r in hits_target[:10]:
-            rev_str = f"{r['rev_pct']*100:.2f}%" if r["rev_pct"] else "none"
-            print(f"  entry={r['entry_pct']*100:.3f}%  "
-                  f"window={r['max_min']}min  "
-                  f"exit={rev_str}  "
-                  f"reentry={'Y' if r['reentry'] else 'N'}  →  "
-                  f"wr={r['win_rate']:.1%}  "
-                  f"{r['trades_p_cyc']*CYCLES_PER_DAY:.0f}trades/d  "
-                  f"daily={r['daily_growth']:+.1%}")
-    else:
-        print(f"{'─'*78}")
-        print("NO SINGLE STRATEGY PROJECTS ≥10%/DAY with current data.")
-        print("Closest strategies and gap to target:")
-        gap_needed = 0.10 - best["daily_growth"]
-        print(f"  Best daily projection: {best['daily_growth']:+.1%}")
-        print(f"  Gap to 10% target:     {gap_needed:+.1%}")
-        print()
-        print("  Ways to close the gap:")
-        # How many trades/day needed at best win rate?
-        for tpd in [10, 20, 48, 96]:
-            tpc = tpd / CYCLES_PER_DAY
-            d = geometric_daily_growth(best["win_rate"], best["avg_entry_px"], tpc)
-            print(f"    {tpd:3d} trades/day @ {best['win_rate']:.0%} wr → {d:+.1%}/day")
-        print()
-        print("  Win rate needed at best trade frequency:")
-        tpc = best["trades_p_cyc"]
-        for wr in [0.70, 0.75, 0.80, 0.85, 0.90, 0.92, 0.95]:
-            d = geometric_daily_growth(wr, best["avg_entry_px"], tpc)
-            mark = " ← TARGET" if d >= 0.10 else ""
-            print(f"    {wr:.0%} win rate → {d:+.1%}/day{mark}")
+        print(f"STRATEGIES ≥10%/DAY EVEN AT PESSIMISTIC CI: {len(hits_target)}")
+    print(f"{'─'*78}")
+    show = hits_target[:10] if hits_target else robust[:10]
+    for r in show:
+        rev_str = f"{r['rev_pct']*100:.2f}%" if r["rev_pct"] else "none"
+        ci_str  = f"[{r['wr_lo']:.0%},{r['wr_hi']:.0%}]"
+        print(f"  entry={r['entry_pct']*100:.3f}%  "
+              f"window={r['max_min']}min  "
+              f"exit={rev_str}  "
+              f"reentry={'Y' if r['reentry'] else 'N'}  →  "
+              f"wr={r['win_rate']:.1%}{ci_str}  "
+              f"px={r['avg_entry_px']:.0f}¢  "
+              f"daily={r['daily_growth']:+.1%}  low={r['daily_lo']:+.1%}")
+
+    if not robust:
+        print("  No strategies show positive EV at the pessimistic bound.")
+        print("  Need more data or a genuinely better edge.")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
