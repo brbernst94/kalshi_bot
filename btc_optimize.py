@@ -234,9 +234,9 @@ def run(client: KalshiClient, n: int = 50) -> None:
     log.info(f"  Dataset: {len(dataset)} markets with full data\n")
 
     # ── 2. Grid search ────────────────────────────────────────────────────────
-    entry_pcts      = [0.05, 0.10, 0.15, 0.20, 0.30, 0.50]
+    entry_pcts      = [0.0005, 0.001, 0.0015, 0.002, 0.003, 0.005]  # 0.05% → 0.5%
     max_entry_mins  = [1, 2, 3, 5, 8, 10, 13]
-    reversal_pcts   = [None, 0.10, 0.20, 0.30]
+    reversal_pcts   = [None, 0.001, 0.002, 0.003]  # none, 0.1%, 0.2%, 0.3%
     reentries       = [False, True]
 
     total_combos = len(entry_pcts) * len(max_entry_mins) * len(reversal_pcts) * len(reentries)
@@ -307,9 +307,9 @@ def run(client: KalshiClient, n: int = 50) -> None:
           f"{'-'*8} {'-'*12}")
 
     for r in results[:20]:
-        rev_str = f"{r['rev_pct']*100:.0f}%" if r["rev_pct"] else " none"
+        rev_str = f"{r['rev_pct']*100:.2f}%" if r["rev_pct"] else "  none"
         print(
-            f"  {r['entry_pct']*100:>6.2f}% {r['max_min']:>7d} {rev_str:>8} "
+            f"  {r['entry_pct']*100:>6.3f}% {r['max_min']:>7d} {rev_str:>8} "
             f"{'yes' if r['reentry'] else 'no':>6} | "
             f"{r['win_rate']:>8.1%} {r['trades_p_cyc']*CYCLES_PER_DAY:>9.1f} "
             f"{r['avg_entry_px']:>7.1f}¢ | "
@@ -321,9 +321,9 @@ def run(client: KalshiClient, n: int = 50) -> None:
     print(f"\n{'='*78}")
     print("BEST STRATEGY — DEEP DIVE")
     print(f"{'='*78}")
-    print(f"  Entry trigger:    BTC moves {best['entry_pct']*100:.2f}% from candle open")
+    print(f"  Entry trigger:    BTC moves {best['entry_pct']*100:.3f}% from candle open")
     print(f"  Entry window:     first {best['max_min']} minute(s) of cycle")
-    rev_str = f"{best['rev_pct']*100:.0f}%" if best["rev_pct"] else "none — hold to resolution"
+    rev_str = f"{best['rev_pct']*100:.2f}%" if best["rev_pct"] else "none — hold to resolution"
     print(f"  Reversal exit:    {rev_str}")
     print(f"  Re-entry:         {'yes' if best['reentry'] else 'no'}")
     print()
@@ -370,8 +370,8 @@ def run(client: KalshiClient, n: int = 50) -> None:
         print(f"STRATEGIES PROJECTING ≥10%/DAY: {len(hits_target)}")
         print(f"{'─'*78}")
         for r in hits_target[:10]:
-            rev_str = f"{r['rev_pct']*100:.0f}%" if r["rev_pct"] else "none"
-            print(f"  entry={r['entry_pct']*100:.2f}%  "
+            rev_str = f"{r['rev_pct']*100:.2f}%" if r["rev_pct"] else "none"
+            print(f"  entry={r['entry_pct']*100:.3f}%  "
                   f"window={r['max_min']}min  "
                   f"exit={rev_str}  "
                   f"reentry={'Y' if r['reentry'] else 'N'}  →  "
