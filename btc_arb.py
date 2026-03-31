@@ -308,9 +308,10 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
                 except Exception:
                     balance = STARTING_BANKROLL_USD
 
-                count    = max(1, int(balance * POSITION_PCT * 100
-                                      / max(kalshi_px, 1)))
-                cost_usd = count * kalshi_px / 100
+                # Size by worst-case reserve price (99¢) not mid-price.
+                # Kalshi holds 99¢ × count until the order fills.
+                count    = max(1, int(balance * POSITION_PCT * 100 / 99))
+                cost_usd = count * kalshi_px / 100   # estimated fill cost
 
                 # EV calculation for logging
                 win_pct  = 0.92   # observed from backtests
