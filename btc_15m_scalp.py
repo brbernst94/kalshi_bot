@@ -45,10 +45,11 @@ logging.basicConfig(
 logger = logging.getLogger("btc15m")
 
 # ── Tunable parameters ────────────────────────────────────────────────────────
-ENTRY_CENTS        = 80    # Enter when side crosses ABOVE this FROM BELOW
+ENTRY_MOVE_CENTS   = 5     # Enter when price moves ≥5¢ from cycle-open reference
 STOP_LOSS_PCT      = 0.10  # Exit if position loses 10% of invested capital
 STOP_GAIN_PCT      = 0.10  # Exit if position gains 10% of invested capital
-WINDOW_MINUTES     = 5     # Minutes before market close to start watching
+WATCH_MINUTES      = 10    # Watch the first N minutes of each 15-min cycle
+EXIT_BEFORE_CLOSE  = 5     # Sell out this many minutes before cycle close
 POSITION_PCT       = 0.80  # 80% of available cash per trade
 MIN_TRADE_USD      = 2.00  # Skip if trade cost is below this
 REENTRY_COOLDOWN_S = 30    # Wait after stop loss before re-entry
@@ -416,23 +417,24 @@ def _market_sell(client: KalshiClient, ticker: str, side: str, count: int) -> bo
 # ── Core hot loop ─────────────────────────────────────────────────────────────
 
 def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
-                 dry_run: bool = False) -> None:
+                 window_end: datetime, dry_run: bool = False) -> None:
     """
-    The 5-minute hot loop.
+    Hot loop: watches the first WATCH_MINUTES of the cycle, exits EXIT_BEFORE_CLOSE
+    minutes before close.
 
     Price source (in priority order):
       1. WebSocket feed — real-time push, < 50ms latency
       2. REST polling   — no sleep, ~100-300ms per call
 
     State machine per window:
-      WATCHING   → enters on 75¢ crossover from below
-      HOLDING    → exits on stop gain (95¢) or stop loss (65¢)
-      DONE       → stop gain hit, window finished
+      WATCHING → enters on ≥5¢ move from cycle-open reference price
+      HOLDING  → exits on +10% gain, -10% loss, or time (5 min before close)
     """
     remaining = (close_time - datetime.now(timezone.utc)).total_seconds()
     logger.info(
         f"━━━ WINDOW OPEN ━━━  {ticker}  |  {remaining:.0f}s  |  "
-        f"entry≥{ENTRY_CENTS}¢  SL=-{STOP_LOSS_PCT:.0%}  SG=+{STOP_GAIN_PCT:.0%}"
+        f"move≥{ENTRY_MOVE_CENTS}¢  SL=-{STOP_LOSS_PCT:.0%}  SG=+{STOP_GAIN_PCT:.0%}  "
+        f"exit@{EXIT_BEFORE_CLOSE}m-left"
     )
 
     # Start WebSocket feed — falls back to REST automatically if unavailable
@@ -448,40 +450,56 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
             return ws.get_price()
         return get_yes_price_rest(client, ticker)
 
-    # Entry tracking — must see price BELOW threshold before crossover can fire
-    seen_yes_below = False
-    seen_no_below  = False
+    # Capture reference price at cycle open — entry fires on ≥5¢ move from here
+    ref_price: Optional[int] = None
 
     # Position state
-    holding     = False
-    pos_side    = ""
-    pos_count   = 0
-    pos_entry   = 0
-    last_sl_ts  = 0.0
-    done        = False
+    holding    = False
+    pos_side   = ""
+    pos_count  = 0
+    pos_entry  = 0
+    last_sl_ts = 0.0
+    done       = False
 
-    ticks = 0
+    ticks   = 0
     t_start = time.time()
 
     while not _stop_flag.is_set() and not done:
-        if datetime.now(timezone.utc) >= close_time:
+        now = datetime.now(timezone.utc)
+        if now >= close_time:
             break
 
         yes_px = _get_price()
         if yes_px is None:
-            # Brief pause only on error to avoid hammering on repeated failures
             time.sleep(0.05)
             continue
 
         ticks += 1
         no_px = 100 - yes_px
 
+        # Latch reference price on first valid tick
+        if ref_price is None:
+            ref_price = yes_px
+            logger.info(f"📍 Reference price: YES={ref_price}¢  NO={100 - ref_price}¢")
+
         if holding:
             pos_px  = yes_px if pos_side == "yes" else no_px
-            secs    = (close_time - datetime.now(timezone.utc)).total_seconds()
+            secs    = (close_time - now).total_seconds()
             pnl_pct = (pos_px - pos_entry) / pos_entry
 
-            if pnl_pct >= STOP_GAIN_PCT:
+            # Time exit — 5 minutes left in cycle
+            if now >= window_end:
+                logger.info(
+                    f"⏰ TIME EXIT  {pos_side.upper()} x{pos_count} "
+                    f"@ {pos_px}¢  ({pnl_pct:+.1%})  ({secs:.0f}s left)"
+                )
+                if not dry_run:
+                    _market_sell(client, ticker, pos_side, pos_count)
+                    pnl = (pos_px - pos_entry) * pos_count / 100
+                    logger.info(f"   PnL ≈ ${pnl:+.2f}")
+                done = True
+
+            elif pnl_pct >= STOP_GAIN_PCT:
                 logger.info(
                     f"🎯 STOP GAIN  {pos_side.upper()} x{pos_count} "
                     f"@ {pos_px}¢  ({pnl_pct:+.1%})  ({secs:.0f}s left)"
@@ -501,38 +519,36 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
                     _market_sell(client, ticker, pos_side, pos_count)
                     pnl = (pos_px - pos_entry) * pos_count / 100
                     logger.info(f"   PnL ≈ ${pnl:+.2f}")
-                holding        = False
-                last_sl_ts     = time.time()
-                seen_yes_below = False   # require fresh crossover to re-enter
-                seen_no_below  = False
+                holding    = False
+                last_sl_ts = time.time()
+                ref_price  = yes_px  # reset reference after stop loss
 
         else:
-            # Update "seen below" flags
-            if yes_px < ENTRY_CENTS:
-                seen_yes_below = True
-            if no_px < ENTRY_CENTS:
-                seen_no_below = True
+            # Don't enter new positions inside the exit window
+            if now >= window_end:
+                break
 
             in_cooldown = (time.time() - last_sl_ts) < REENTRY_COOLDOWN_S
 
-            if not in_cooldown:
+            if not in_cooldown and ref_price is not None:
+                move       = yes_px - ref_price
                 entry_side  = ""
                 entry_price = 0
 
-                if seen_yes_below and yes_px >= ENTRY_CENTS:
+                if move >= ENTRY_MOVE_CENTS:
                     entry_side, entry_price = "yes", yes_px
-                elif seen_no_below and no_px >= ENTRY_CENTS:
+                elif move <= -ENTRY_MOVE_CENTS:
                     entry_side, entry_price = "no", no_px
 
                 if entry_side:
-                    secs = (close_time - datetime.now(timezone.utc)).total_seconds()
+                    secs = (close_time - now).total_seconds()
                     logger.info(
-                        f"🔼 BREAKOUT  {entry_side.upper()} @ {entry_price}¢  "
-                        f"({secs:.0f}s left)"
+                        f"🔼 MOVE  {entry_side.upper()} @ {entry_price}¢  "
+                        f"(ref={ref_price}¢ move={move:+d}¢  {secs:.0f}s left)"
                     )
 
                     try:
-                        balance = client.get_cash()   # spendable cash only
+                        balance = client.get_cash()
                     except Exception:
                         balance = STARTING_BANKROLL_USD
 
@@ -542,8 +558,7 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
 
                     if cost_usd >= MIN_TRADE_USD:
                         if not dry_run:
-                            ok = _market_buy(client, ticker,
-                                             entry_side, count)
+                            ok = _market_buy(client, ticker, entry_side, count)
                         else:
                             ok = True
                             logger.info(
@@ -552,17 +567,15 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
                             )
 
                         if ok:
-                            holding    = True
-                            pos_side   = entry_side
-                            pos_count  = count
-                            pos_entry  = entry_price
+                            holding   = True
+                            pos_side  = entry_side
+                            pos_count = count
+                            pos_entry = entry_price
                             if not dry_run:
                                 logger.info(
                                     f"✅ Entered {entry_side.upper()} "
                                     f"x{count} @ {entry_price}¢  ${cost_usd:.2f}"
                                 )
-                            seen_yes_below = False
-                            seen_no_below  = False
                     else:
                         logger.debug(f"Trade too small (${cost_usd:.2f} < ${MIN_TRADE_USD})")
 
@@ -577,21 +590,26 @@ def scalp_window(client: KalshiClient, ticker: str, close_time: datetime,
     ws.stop()
 
     if holding:
-        secs = max(0, (close_time - datetime.now(timezone.utc)).total_seconds())
+        # Exited the watch window still holding — shouldn't happen, but sell cleanly
+        pos_px = None
+        try:
+            pos_px = get_yes_price_rest(client, ticker)
+        except Exception:
+            pass
+        px_str = f"@ {pos_px}¢" if pos_px is not None else "(price unknown)"
         logger.info(
-            f"━━━ WINDOW CLOSED ━━━  Holding {pos_side.upper()} x{pos_count} "
-            f"@ {pos_entry}¢ → resolves in ~{secs:.0f}s  "
-            f"[{ticks} ticks @ {hz:.0f} Hz]"
+            f"━━━ WINDOW CLOSED ━━━  Still holding {pos_side.upper()} x{pos_count} "
+            f"{px_str} — selling now  [{ticks} ticks @ {hz:.0f} Hz]"
         )
+        if not dry_run:
+            _market_sell(client, ticker, pos_side, pos_count)
     elif done:
         logger.info(
-            f"━━━ WINDOW CLOSED ━━━  Stop gain taken ✓  "
-            f"[{ticks} ticks @ {hz:.0f} Hz]"
+            f"━━━ WINDOW CLOSED ━━━  Exited ✓  [{ticks} ticks @ {hz:.0f} Hz]"
         )
     else:
         logger.info(
-            f"━━━ WINDOW CLOSED ━━━  No position  "
-            f"[{ticks} ticks @ {hz:.0f} Hz]"
+            f"━━━ WINDOW CLOSED ━━━  No position  [{ticks} ticks @ {hz:.0f} Hz]"
         )
 
 
@@ -604,15 +622,25 @@ def run(client: KalshiClient, dry_run: bool = False) -> None:
         f"{'DRY-RUN' if dry_run else 'LIVE 🔴'}"
     )
     logger.info(
-        f"entry≥{ENTRY_CENTS}¢  SL=-{STOP_LOSS_PCT:.0%}  SG=+{STOP_GAIN_PCT:.0%}  "
+        f"move≥{ENTRY_MOVE_CENTS}¢  SL=-{STOP_LOSS_PCT:.0%}  SG=+{STOP_GAIN_PCT:.0%}  "
+        f"watch={WATCH_MINUTES}m  exit@{EXIT_BEFORE_CLOSE}m-left  "
         f"size={POSITION_PCT:.0%}  min=${MIN_TRADE_USD}"
     )
 
     while not _stop_flag.is_set():
         close_time   = _next_close()
-        window_start = close_time - timedelta(minutes=WINDOW_MINUTES)
+        # Watch starts at cycle open (15 min before close)
+        window_start = close_time - timedelta(minutes=15)
+        # Sell out EXIT_BEFORE_CLOSE minutes before close
+        window_end   = close_time - timedelta(minutes=EXIT_BEFORE_CLOSE)
         now          = datetime.now(timezone.utc)
-        sleep_secs   = (window_start - now).total_seconds()
+
+        # If we're already past the exit point, skip to next cycle
+        if now >= window_end:
+            time.sleep(5)
+            continue
+
+        sleep_secs = (window_start - now).total_seconds()
 
         close_utc = close_time.strftime("%H:%M UTC")
         close_mst = (close_time - timedelta(hours=7)).strftime("%H:%M MST")
@@ -620,8 +648,9 @@ def run(client: KalshiClient, dry_run: bool = False) -> None:
 
         if sleep_secs > 2:
             logger.info(
-                f"Next window: closes {close_utc} / {close_mst} / {close_mdt}  "
-                f"(sleeping {sleep_secs:.0f}s)"
+                f"Next window: {window_start.strftime('%H:%M')}–{window_end.strftime('%H:%M')} UTC  "
+                f"(closes {close_utc} / {close_mst} / {close_mdt})  "
+                f"sleeping {sleep_secs:.0f}s"
             )
             _sleep_until(window_start)
 
@@ -636,11 +665,10 @@ def run(client: KalshiClient, dry_run: bool = False) -> None:
 
         ticker, market_close = result
         logger.info(
-            f"Market: {ticker}  "
-            f"closes {market_close.strftime('%H:%M:%S')} UTC"
+            f"Market: {ticker}  closes {market_close.strftime('%H:%M:%S')} UTC"
         )
 
-        scalp_window(client, ticker, market_close, dry_run=dry_run)
+        scalp_window(client, ticker, market_close, window_end, dry_run=dry_run)
         time.sleep(5)   # avoid clock-edge race before next_close() recalculates
 
 
