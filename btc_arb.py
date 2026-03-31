@@ -47,8 +47,8 @@ logger = logging.getLogger("btcarb")
 
 # ── Parameters ────────────────────────────────────────────────────────────────
 BTC_ENTRY_PCT     = 0.0015  # 0.15% BTC move from candle open triggers entry
-BTC_EXIT_PCT      = None    # None = hold to resolution (no reversal exit)
-                             # Set to e.g. -0.001 to exit on -0.1% reversal
+BTC_EXIT_PCT      = 0.0     # exit if BTC crosses back to flat (0%) against position
+                             # e.g. entered YES on +0.15%, sell if BTC drops back to 0%
 NO_ENTRY_FINAL_S  = 600     # only enter in first 5 min (stop with 10 min left)
 POSITION_PCT      = 0.80    # 80% of available cash per trade
 MIN_TRADE_USD     = 2.00    # skip if cost is below this
@@ -268,27 +268,20 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
         move_pct = (btc_now - btc_open) / btc_open   # +ve = BTC up
 
         if holding:
-            # Check for reversal exit signal (only if BTC_EXIT_PCT is set)
-            if BTC_EXIT_PCT is not None:
-                secs = (close_time - now).total_seconds()
-
-                if pos_side == "yes" and move_pct <= BTC_EXIT_PCT:
-                    logger.info(
-                        f"↩️  BTC REVERSED  YES  btc_move={move_pct*100:+.3f}%  "
-                        f"({secs:.0f}s left) — exiting early"
-                    )
-                    if not dry_run:
-                        _market_sell(client, ticker, pos_side, pos_count)
-                    break
-
-                elif pos_side == "no" and move_pct >= -BTC_EXIT_PCT:
-                    logger.info(
-                        f"↩️  BTC REVERSED  NO   btc_move={move_pct*100:+.3f}%  "
-                        f"({secs:.0f}s left) — exiting early"
-                    )
-                    if not dry_run:
-                        _market_sell(client, ticker, pos_side, pos_count)
-                    break
+            # Exit if BTC crosses back to flat (0%) against our position
+            secs = (close_time - now).total_seconds()
+            reversed_out = (
+                (pos_side == "yes" and move_pct <= BTC_EXIT_PCT) or
+                (pos_side == "no"  and move_pct >= -BTC_EXIT_PCT)
+            )
+            if reversed_out:
+                logger.info(
+                    f"↩️  BTC REVERSED  {pos_side.upper()}  btc_move={move_pct*100:+.3f}%  "
+                    f"({secs:.0f}s left) — exiting early"
+                )
+                if not dry_run:
+                    _market_sell(client, ticker, pos_side, pos_count)
+                break
 
         else:
             # Don't enter in the final 2 minutes
@@ -379,7 +372,7 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
 def run(client: KalshiClient, dry_run: bool = False) -> None:
     bal = client.get_cash()
     logger.info(f"BTC Arb | balance=${bal:.2f} | {'DRY-RUN' if dry_run else 'LIVE 🔴'}")
-    exit_str = f"exit<{BTC_EXIT_PCT*100:.2f}% reversal" if BTC_EXIT_PCT else "hold-to-resolution"
+    exit_str = f"exit@{BTC_EXIT_PCT*100:.2f}% reversal" if BTC_EXIT_PCT is not None else "hold-to-resolution"
     logger.info(
         f"entry≥{BTC_ENTRY_PCT*100:.2f}% BTC move  "
         f"{exit_str}  "
