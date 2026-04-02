@@ -49,7 +49,7 @@ logger = logging.getLogger("btcarb")
 BTC_ENTRY_PCT     = 0.0015  # 0.15% BTC move from candle open triggers entry
 STOP_LOSS_PCT     = 0.50    # exit if Kalshi contract loses 50% of entry price
                              # e.g. entered YES at 70¢ → sell if YES drops to 35¢
-NO_ENTRY_FINAL_S  = 600     # only enter in first 5 min (stop with 10 min left)
+NO_ENTRY_FINAL_S  = 300     # only enter in first 10 min (stop with 5 min left)
 POSITION_PCT      = 0.21    # ~Quarter Kelly — survives variance without blowing up
 MIN_TRADE_USD     = 2.00    # skip if cost is below this
 SETTLEMENT_FEE    = 0.07    # 7% of winnings taken by Kalshi at resolution
