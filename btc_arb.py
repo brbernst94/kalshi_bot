@@ -50,9 +50,10 @@ BTC_ENTRY_PCT     = 0.0015  # 0.15% BTC move from candle open triggers entry
 STOP_LOSS_PCT     = 0.50    # exit if Kalshi contract loses 50% of entry price
                              # e.g. entered YES at 70¢ → sell if YES drops to 35¢
 NO_ENTRY_FINAL_S  = 600     # only enter in first 5 min (stop with 10 min left)
-POSITION_PCT      = 0.80    # 80% of available cash per trade
+POSITION_PCT      = 0.21    # ~Quarter Kelly — survives variance without blowing up
 MIN_TRADE_USD     = 2.00    # skip if cost is below this
 SETTLEMENT_FEE    = 0.07    # 7% of winnings taken by Kalshi at resolution
+MIN_EV            = 0.05    # skip trade if EV < 5¢ per dollar risked
 
 _stop_flag = threading.Event()
 
@@ -329,11 +330,18 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
                 count    = max(1, int(balance * POSITION_PCT * 100 / 99))
                 cost_usd = count * kalshi_px / 100   # estimated fill cost
 
-                # EV calculation for logging
+                # EV check — skip if Kalshi has already priced out the edge
                 win_pct  = 0.92   # observed from backtests
                 win_pay  = (100 - kalshi_px) / 100 * (1 - SETTLEMENT_FEE)
                 lose_pay = kalshi_px / 100
                 ev_per_dollar = win_pct * win_pay - (1 - win_pct) * lose_pay
+
+                if ev_per_dollar < MIN_EV:
+                    logger.info(
+                        f"⏭  LOW EV  {side.upper()}  kalshi={kalshi_px}¢  "
+                        f"EV={ev_per_dollar:+.2f}/$ < {MIN_EV:.2f} threshold — skipping"
+                    )
+                    break
 
                 logger.info(
                     f"🚀 BTC SIGNAL  {side.upper()}  "
