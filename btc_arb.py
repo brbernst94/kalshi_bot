@@ -46,7 +46,7 @@ logging.basicConfig(
 logger = logging.getLogger("btcarb")
 
 # ── Parameters ────────────────────────────────────────────────────────────────
-BTC_ENTRY_PCT     = 0.0015  # 0.15% BTC move from candle open triggers entry
+BTC_ENTRY_PCT     = 0.0010  # 0.10% BTC move from candle open triggers entry
 STOP_LOSS_PCT     = 0.50    # exit if Kalshi contract loses 50% of entry price
                              # e.g. entered YES at 70¢ → sell if YES drops to 35¢
 NO_ENTRY_FINAL_S  = 300     # only enter in first 10 min (stop with 5 min left)
