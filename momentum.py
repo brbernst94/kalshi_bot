@@ -95,6 +95,7 @@ MOMENTUM_SKIP_PREFIXES = (
     "KXETHD", "KXSOLD", "KXXRPD",              # Other daily crypto contracts
     # ── Crypto spot above/below format ───────────────────────────────────────
     "KXBTC-", "KXETH-", "KXSOL-", "KXXRP-",   # Spot contracts — different format, no edge
+    "KXSOLE-", "KXINXU-",                       # Additional spot variants seen in logs
     # ── Index variants ───────────────────────────────────────────────────────
     "KXSOLE-", "KXINXU-",
 )

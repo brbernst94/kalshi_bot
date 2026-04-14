@@ -46,14 +46,13 @@ logging.basicConfig(
 logger = logging.getLogger("btcarb")
 
 # ── Parameters ────────────────────────────────────────────────────────────────
-BTC_ENTRY_PCT     = 0.0010  # 0.10% BTC move from candle open triggers entry
-STOP_LOSS_PCT     = 0.50    # exit if Kalshi contract loses 50% of entry price
-                             # e.g. entered YES at 70¢ → sell if YES drops to 35¢
-NO_ENTRY_FINAL_S  = 300     # only enter in first 10 min (stop with 5 min left)
-POSITION_PCT      = 0.21    # ~Quarter Kelly — survives variance without blowing up
+BTC_ENTRY_PCT     = 0.001   # 0.1% BTC move from candle open triggers entry
+BTC_EXIT_PCT      = -0.001  # exit if BTC reverses past -0.1% against position
+                             # e.g. entered YES on +0.15%, sell if BTC hits -0.1%
+NO_ENTRY_FINAL_S  = 120     # stop entering in the last 2 min of cycle
+POSITION_PCT      = 0.80    # 80% of available cash per trade
 MIN_TRADE_USD     = 2.00    # skip if cost is below this
 SETTLEMENT_FEE    = 0.07    # 7% of winnings taken by Kalshi at resolution
-MIN_EV            = 0.05    # skip trade if EV < 5¢ per dollar risked
 
 _stop_flag = threading.Event()
 
@@ -203,11 +202,6 @@ def _market_buy(client: KalshiClient, ticker: str, side: str, count: int) -> boo
         return True
     except Exception as e:
         logger.error(f"Buy failed: {e}")
-        if hasattr(e, "response") and e.response is not None:
-            try:
-                logger.error(f"Buy error body: {e.response.text}")
-            except Exception:
-                pass
         return False
 
 
@@ -240,23 +234,21 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
     """
     Watches one 15-min cycle.  Enters on BTC_ENTRY_PCT move, then either:
       - Holds to resolution if BTC direction holds
-      - Exits early if Kalshi contract drops 50% from entry price (STOP_LOSS_PCT)
+      - Exits early if BTC fully reverses past BTC_EXIT_PCT against position
     """
     no_entry_after = close_time - timedelta(seconds=NO_ENTRY_FINAL_S)
     secs_total     = (close_time - datetime.now(timezone.utc)).total_seconds()
-    exit_str       = f"stop={STOP_LOSS_PCT:.0%}loss"
     logger.info(
         f"━━━ CYCLE  {ticker}  closes {close_time.strftime('%H:%M:%S')} UTC  "
-        f"({secs_total:.0f}s)  entry≥{BTC_ENTRY_PCT*100:.2f}%  {exit_str}"
+        f"({secs_total:.0f}s)  entry≥{BTC_ENTRY_PCT*100:.2f}%  "
+        f"exit<{BTC_EXIT_PCT*100:.2f}%"
     )
 
     holding    = False
     pos_side   = ""
     pos_count  = 0
-    pos_entry_btc  = 0.0
-    pos_kalshi_px  = 0
-    last_stop_check = 0.0
-    exited_early    = False
+    pos_entry_btc  = 0.0   # BTC move% when we entered (for logging)
+    pos_kalshi_px  = 0     # Kalshi price at entry
 
     while not _stop_flag.is_set():
         now = datetime.now(timezone.utc)
@@ -271,41 +263,28 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
         move_pct = (btc_now - btc_open) / btc_open   # +ve = BTC up
 
         if holding:
+            # Check for reversal exit signal
+            # If we're long YES, we want move_pct > 0.  Exit if it drops below BTC_EXIT_PCT.
+            # If we're long NO,  we want move_pct < 0.  Exit if it rises above -BTC_EXIT_PCT.
             secs = (close_time - now).total_seconds()
 
-            # ── BTC backup stop: BTC reversed past entry threshold (other side)
-            # e.g. entered YES at +0.15% → stop if BTC drops to -0.15%
-            # This approximates a ~50% Kalshi loss without needing an API call.
-            btc_reversed = (
-                (pos_side == "yes" and move_pct <= -BTC_ENTRY_PCT) or
-                (pos_side == "no"  and move_pct >=  BTC_ENTRY_PCT)
-            )
-            if btc_reversed:
+            if pos_side == "yes" and move_pct <= BTC_EXIT_PCT:
                 logger.info(
-                    f"🛑 BTC STOP  {pos_side.upper()}  btc_move={move_pct*100:+.3f}%  "
-                    f"({secs:.0f}s left) — BTC reversed past -{BTC_ENTRY_PCT*100:.2f}%"
+                    f"↩️  BTC REVERSED  YES  btc_move={move_pct*100:+.3f}%  "
+                    f"({secs:.0f}s left) — exiting early"
                 )
                 if not dry_run:
                     _market_sell(client, ticker, pos_side, pos_count)
-                exited_early = True
                 break
 
-            # ── Kalshi price stop: exit if contract loses 50% of entry price ──
-            if now.timestamp() - last_stop_check >= 5.0:
-                last_stop_check = now.timestamp()
-                cur_px = _get_kalshi_price(client, ticker)
-                if cur_px is not None:
-                    stop_px = pos_kalshi_px * STOP_LOSS_PCT
-                    if cur_px <= stop_px:
-                        logger.info(
-                            f"🛑 KALSHI STOP  {pos_side.upper()}  "
-                            f"entry={pos_kalshi_px}¢  now={cur_px}¢  "
-                            f"stop={stop_px:.0f}¢  ({secs:.0f}s left) — exiting"
-                        )
-                        if not dry_run:
-                            _market_sell(client, ticker, pos_side, pos_count)
-                        exited_early = True
-                        break
+            elif pos_side == "no" and move_pct >= -BTC_EXIT_PCT:
+                logger.info(
+                    f"↩️  BTC REVERSED  NO   btc_move={move_pct*100:+.3f}%  "
+                    f"({secs:.0f}s left) — exiting early"
+                )
+                if not dry_run:
+                    _market_sell(client, ticker, pos_side, pos_count)
+                break
 
         else:
             # Don't enter in the final 2 minutes
@@ -325,23 +304,15 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
                 except Exception:
                     balance = STARTING_BANKROLL_USD
 
-                # Size by worst-case reserve price (99¢) not mid-price.
-                # Kalshi holds 99¢ × count until the order fills.
-                count    = max(1, int(balance * POSITION_PCT * 100 / 99))
-                cost_usd = count * kalshi_px / 100   # estimated fill cost
+                count    = max(1, int(balance * POSITION_PCT * 100
+                                      / max(kalshi_px, 1)))
+                cost_usd = count * kalshi_px / 100
 
-                # EV check — skip if Kalshi has already priced out the edge
+                # EV calculation for logging
                 win_pct  = 0.92   # observed from backtests
                 win_pay  = (100 - kalshi_px) / 100 * (1 - SETTLEMENT_FEE)
                 lose_pay = kalshi_px / 100
                 ev_per_dollar = win_pct * win_pay - (1 - win_pct) * lose_pay
-
-                if ev_per_dollar < MIN_EV:
-                    logger.info(
-                        f"⏭  LOW EV  {side.upper()}  kalshi={kalshi_px}¢  "
-                        f"EV={ev_per_dollar:+.2f}/$ < {MIN_EV:.2f} threshold — skipping"
-                    )
-                    break
 
                 logger.info(
                     f"🚀 BTC SIGNAL  {side.upper()}  "
@@ -376,10 +347,6 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
                             f"@ ~{kalshi_px}¢  ${cost_usd:.2f}  "
                             f"hold to {close_time.strftime('%H:%M:%S')} UTC"
                         )
-                else:
-                    # Buy failed — stop attempting this cycle to avoid order spam
-                    logger.warning("Order failed — skipping remainder of cycle")
-                    break
 
         time.sleep(0.01)   # 100 Hz — WS push is near-instant
 
@@ -387,7 +354,7 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
     btc_open, btc_final, _ = feed.get_state()
     final_move = ((btc_final - btc_open) / btc_open * 100) if btc_open and btc_final else 0.0
 
-    if holding and not exited_early:
+    if holding:
         logger.info(
             f"━━━ HOLDING to resolution  {pos_side.upper()} x{pos_count} "
             f"@ ~{pos_kalshi_px}¢  |  final BTC move={final_move:+.3f}%"
@@ -405,8 +372,7 @@ def run(client: KalshiClient, dry_run: bool = False) -> None:
     logger.info(f"BTC Arb | balance=${bal:.2f} | {'DRY-RUN' if dry_run else 'LIVE 🔴'}")
     logger.info(
         f"entry≥{BTC_ENTRY_PCT*100:.2f}% BTC move  "
-        f"stop={STOP_LOSS_PCT:.0%}loss  "
-        f"window=first {(900-NO_ENTRY_FINAL_S)//60}min  "
+        f"exit<{BTC_EXIT_PCT*100:.2f}% reversal  "
         f"size={POSITION_PCT:.0%}  fee={SETTLEMENT_FEE:.0%}"
     )
 
@@ -439,16 +405,14 @@ def run(client: KalshiClient, dry_run: bool = False) -> None:
         if _stop_flag.is_set():
             break
 
-        # Find the market — retry up to 12x with 5s gaps (60s total).
-        # Kalshi sometimes takes 15-30s to open the next market after close.
+        # Find the market (retry up to 3x — occasionally takes a moment to open)
         result = None
-        for attempt in range(12):
+        for attempt in range(3):
             result = find_market(client)
             if result:
                 break
-            if attempt < 11:
-                logger.warning(f"No KXBTC15M market found (attempt {attempt+1}/12) — retrying in 5s")
-                time.sleep(5)
+            logger.warning(f"No KXBTC15M market found (attempt {attempt+1}/3) — retrying in 5s")
+            time.sleep(5)
 
         if not result:
             logger.warning("Skipping cycle — no open market found")

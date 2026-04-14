@@ -37,54 +37,28 @@ def _cost_usd(count: int, price_cents: int) -> float:
 
 def fetch_large_fills(client) -> List[Dict]:
     """
-    Pull recent large trades — only from high-edge markets.
-    Sports excluded (near-50/50 mid-game, correlated losses).
-    Financial, crypto, political markets kept (real info asymmetry).
-    Tracked whale members bypass the filter entirely.
+    Pull recent large trades — allowlist only.
+    Everything NOT on the allowlist is blocked automatically.
+    No more unknown sports leagues bleeding through.
     """
-    HIGH_EDGE_PREFIXES = (
-        "KXBTCD", "KXETHD", "KXXRPD", "KXSOLD",   # Crypto prices
-        "KXFED", "KXFEDDECISION",                   # Fed rate
-        "KXCPI", "KXPCE", "KXGDP", "KXUNRATE",     # Economic data
-        "KXNFP", "KXSPX", "KXNAS", "KXDOW",        # Markets/jobs
-        "KXGOLD", "KXOIL",                           # Commodities
-        "KXPRES", "KXTXRUN", "KXTRUMP",             # Political
-        "KXCONGRESS", "KXSUPREME", "KXELECTION",    # Gov/courts
-        "KXACAREPEAL", "KXSPACEX", "KXIPORA",       # Policy/tech
-        "KXPRESMENTION",                             # Presidential mentions
-        "KXHOUSERACE", "KXSENRACE",                 # Race markets (not sports)
-        "KXPOWER", "KXBITCOIN",                     # Energy/crypto variants
-    )
-
-    SPORTS_PREFIXES = (
-        # US sports
-        "KXNCAAMB", "KXNCAAFB", "KXNCAAWB",
-        "KXNBA", "KXNBAGAME", "KXNFL", "KXNFLGAME",
-        "KXMLB", "KXMLS",
-        "KXNHL",                                # catches KXNHLGAME/TOTAL/WEST/EAST
-        "KXNBA2KCOVER", "KXMLBNL",
-        # Tennis — all variants
-        "KXATP",                                # KXATPMATCH, KXATPCHALLENGERMATCH, KXATPGSPREAD, etc.
-        "KXWTA", "KXITN",
-        # International soccer / basketball
-        "KXUCL",                                # KXUCLGAME, KXUCLSPREAD, KXUCLTOTAL
-        "KXUEL",                                # UEFA Europa League (KXUELGAME, KXUELTOTAL)
-        "KXUECL",                               # UEFA Europa Conference League
-        "KXCONCACAF",
-        "KXBRASILEIRO", "KXARGPREMDIV",
-        "KXEUROLEAGUE", "KXFIBACHAMP",
-        "KXBUNDES", "KXSERIEA", "KXLALIGA", "KXLIGUE", "KXEPL", "KXUEFA",
-        # Other sports
-        "KXWBC", "KXWBO", "KXWBA", "KXIBF", "KXUFC", "KXPGA",
-        "KXKBL", "KXAFC", "KXJBL", "KXCBA", "KXKBO", "KXNPB",
-        # Esports — high volume but random outcomes, no exploitable edge
-        "KXCS2",                                # CS2/Counter-Strike (seen in logs)
-        "KXLOL", "KXVALO", "KXRL", "KXDOTA", "KXESPORT",
-        # Other football / misc leagues seen bleeding through
-        "KXEFL",                                # EFL Championship (seen in logs)
-        "KXCFL", "KXAFL", "KXSERIEB",
-        "KXLIVTOUR",                            # LIV Golf
-        "KXIWMEN",                              # Weightlifting / similar misc sport
+    # Only these prefixes are allowed. Everything else is blocked.
+    WHALE_ALLOWLIST = (
+        # Crypto 15m
+        "KXBTC15M",
+        # Crypto daily
+        "KXBTCD", "KXETHD", "KXXRPD", "KXSOLD",
+        # Weather
+        "KXHIGH", "KXLOW", "KXPRECIP",
+        # Macro data releases
+        "KXCPI", "KXPCE", "KXNFP", "KXGDP", "KXUNRATE",
+        "KXFED", "KXFEDDECISION", "KXFOMC",
+        "KXSPX", "KXNAS", "KXDOW", "KXGOLD", "KXOIL",
+        # Mentions
+        "KXPRESMENTION", "KXMENTION",
+        # Political / government
+        "KXPRES", "KXTRUMP", "KXELECTION",
+        "KXCONGRESS", "KXSUPREME", "KXGOVTSHUT",
+        "KXHOUSERACE", "KXSENRACE",
     )
 
     large_fills = []
@@ -95,18 +69,14 @@ def fetch_large_fills(client) -> List[Dict]:
         logger.error(f"[WHALE] Market fetch failed: {e}")
         return []
 
-    sports_skipped = 0
+    skipped = 0
 
-    # During off-peak hours (4-7pm ET, overnight), lower the bar to catch
-    # whatever signal exists rather than returning 0
     from datetime import datetime, timezone
     hour_utc = datetime.now(timezone.utc).hour
-    # 21:00-23:59 UTC = 4-7pm ET (off-peak), 0-11 UTC = overnight/pre-market
     is_off_peak = hour_utc >= 21 or hour_utc <= 11
     effective_min = max(20, WHALE_MIN_CONTRACTS // 2) if is_off_peak else WHALE_MIN_CONTRACTS
 
     for t in trades:
-        # Handle fractional count migration (count_fp is string like "31.00")
         count_raw = t.get("count_fp") or t.get("count", 0)
         try:
             count = int(float(count_raw))
@@ -119,13 +89,10 @@ def fetch_large_fills(client) -> List[Dict]:
         member_id = t.get("taker_member_id", "")
         is_tracked = member_id in TRACKED_WHALE_MEMBERS
 
-        # Always skip KXMVE parlays
-        if ticker.startswith("KXMVE") or ticker.startswith("KXMVECROSS"):
-            sports_skipped += 1
+        # Allowlist filter — block anything not explicitly permitted
+        if not is_tracked and not any(ticker.startswith(p) for p in WHALE_ALLOWLIST):
+            skipped += 1
             continue
-
-        # Accept everything — sports included
-        # (user wants all large fills copied regardless of category)
 
         price = _pc(t, "yes_price") or _pc(t, "no_price") or 50
         side  = t.get("taker_side", "yes")
@@ -153,7 +120,7 @@ def fetch_large_fills(client) -> List[Dict]:
             seen[t] = f
     large_fills = sorted(seen.values(), key=lambda x: x["cost_usd"], reverse=True)
 
-    logger.info(f"[WHALE] {len(large_fills)} quality fills ({sports_skipped} sports/low-edge skipped)")
+    logger.info(f"[WHALE] {len(large_fills)} quality fills ({skipped} non-allowlist skipped)")
     return large_fills
 
 

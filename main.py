@@ -31,10 +31,10 @@ import whale as whale_strat
 import momentum as momentum_strat
 import datarelease as datarelease_strat
 import weather as weather_strat
-import mentions as mentions_strat
+import favbias as favbias_strat
 from config import (
     WHALE_SCAN_MINS, MOMENTUM_SCAN_MINS, MONITOR_SCAN_MINS,
-    DATARELEASE_SCAN_MINS, WEATHER_SCAN_MINS, MENTIONS_SCAN_MINS,
+    DATARELEASE_SCAN_MINS, WEATHER_SCAN_MINS, FAVBIAS_SCAN_MINS,
 )
 
 setup_logging()
@@ -87,11 +87,11 @@ def run_weather():
     c = weather_strat.scan(client, risk_manager, markets)
     if not DRY_RUN: weather_strat.execute(client, risk_manager, c)
 
-def run_mentions():
-    logger.info("━━━ MENTIONS CYCLE ━━━")
+def run_favbias():
+    logger.info("━━━ FAVBIAS CYCLE ━━━")
     markets = get_cached_markets()
-    c = mentions_strat.scan(client, risk_manager, markets)
-    if not DRY_RUN: mentions_strat.execute(client, risk_manager, c)
+    c = favbias_strat.scan(client, risk_manager, markets)
+    if not DRY_RUN: favbias_strat.execute(client, risk_manager, c)
 
 def run_monitor():
     global cycle
@@ -189,13 +189,22 @@ def main():
 
     # ── Schedules ─────────────────────────────────────────────────────────────
     schedule.every(WHALE_SCAN_MINS).minutes.do(run_whale)
+    schedule.every(MOMENTUM_SCAN_MINS).minutes.do(run_momentum)
+    schedule.every(DATARELEASE_SCAN_MINS).minutes.do(run_datarelease)
+    schedule.every(WEATHER_SCAN_MINS).minutes.do(run_weather)
+    schedule.every(FAVBIAS_SCAN_MINS).minutes.do(run_favbias)
     schedule.every(MONITOR_SCAN_MINS).minutes.do(run_monitor)
     schedule.every(4).hours.do(run_cleanup)
     schedule.every().day.at("00:15").do(run_analysis)
     schedule.every().day.at("23:55").do(monthly_summary)
 
     logger.info("Running initial scan on startup...")
+    run_cleanup()
     run_whale()
+    run_momentum()
+    run_datarelease()
+    run_weather()
+    run_favbias()
     run_monitor()
 
     logger.info("⏱  Main loop active. Daily analysis scheduled for 00:15 UTC.")
