@@ -165,6 +165,15 @@ def scan(client, risk_manager, markets: List[Dict] = None) -> List[Dict]:
     from config import MAX_POSITION_DAYS
     cache = {m.get("ticker", ""): m for m in (markets or [])}
 
+    # Build set of event_tickers already held — one position per event max
+    held_events: set = set()
+    for held_ticker in risk_manager.open_positions:
+        mkt = cache.get(held_ticker)
+        if mkt:
+            et = mkt.get("event_ticker", "")
+            if et:
+                held_events.add(et)
+
     candidates = []
 
     for fill in raw_fills:
@@ -189,6 +198,12 @@ def scan(client, risk_manager, markets: List[Dict] = None) -> List[Dict]:
             )
             continue
 
+        # ── Event dedup — one position per underlying event ───────────────
+        event_ticker = mkt.get("event_ticker", "") if mkt else ""
+        if event_ticker and event_ticker in held_events:
+            logger.debug(f"[WHALE] SKIP {ticker} — already hold a position in event {event_ticker}")
+            continue
+
         # Cool-down: skip if we already copied this ticker recently
         if ticker in _recent_copies:
             last = _recent_copies[ticker]
@@ -203,11 +218,15 @@ def scan(client, risk_manager, markets: List[Dict] = None) -> List[Dict]:
 
         candidates.append({
             **fill,
+            "event_ticker": event_ticker,
             "confidence":   confidence,
             "edge":         edge,
             "member_stats": stats,
             "detected_at":  datetime.now(timezone.utc),
         })
+        # Reserve this event so later fills in the same cycle don't double-up
+        if event_ticker:
+            held_events.add(event_ticker)
 
     candidates.sort(key=lambda x: x["cost_usd"] * x["confidence"], reverse=True)
     logger.info(f"[WHALE] {len(candidates)} actionable signal(s)")
