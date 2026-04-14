@@ -195,7 +195,10 @@ class KalshiClient:
             f"{self.base_url}{path}", headers=headers,
             data=json.dumps(body), timeout=15
         )
-        resp.raise_for_status()
+        if not resp.ok:
+            raise requests.HTTPError(
+                f"{resp.status_code} {resp.reason} — {resp.text}", response=resp
+            )
         return resp.json()
 
     def _delete(self, path: str) -> Any:
