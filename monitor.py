@@ -105,6 +105,7 @@ def check_positions(client, risk_manager) -> int:
                     client.place_limit_order(
                         ticker=ticker, side=exit_side, action="sell",
                         price_cents=exit_price, count=count,
+                        post_only=False,  # taker — guarantee the exit crosses
                     )
                 except Exception as e:
                     if "400" in str(e):
@@ -114,6 +115,7 @@ def check_positions(client, risk_manager) -> int:
                             client.place_limit_order(
                                 ticker=ticker, side=flip_side, action="sell",
                                 price_cents=exit_price, count=count,
+                                post_only=False,
                             )
                             exit_side = flip_side
                         except Exception:
@@ -122,6 +124,7 @@ def check_positions(client, risk_manager) -> int:
                             client.place_limit_order(
                                 ticker=ticker, side=exit_side, action="sell",
                                 price_cents=fallback_price, count=count,
+                                post_only=False,
                             )
                             exit_price = fallback_price
                     else:
@@ -349,6 +352,7 @@ def cleanup_long_dated_positions(client, risk_manager,
             client.place_limit_order(
                 ticker=ticker, side=side, action="sell",
                 price_cents=exit_price, count=qty,
+                post_only=False,  # taker — must guarantee exit crosses book
             )
 
             if ticker in risk_manager.open_positions:
