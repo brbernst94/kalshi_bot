@@ -41,24 +41,30 @@ logger = logging.getLogger(__name__)
 # NOTE: "KXGDP" is intentionally NOT included — it matches KXGDPNOM (foreign
 # annual GDP markets resolving ~1yr out). Use KXGDPUS/KXGDPQ for US GDP only.
 DATA_RELEASE_PREFIXES = (
-    "KXCPI", "KXFED", "KXFEDDECISION", "KXNFP",
-    "KXGDPUS", "KXGDPQ", "KXUNRATE", "KXPCE", "KXFOMC",
+    "KXCPI", "KXFED-", "KXFEDDECISION-", "KXNFP",
+    "KXGDPUS", "KXGDPQ", "KXUNRATE", "KXPCE", "KXFOMC-",
     "KXJOBLESS", "KXJOBLESSCLAIMS",
     "KXRETAIL", "KXHOUSING", "KXISM",
     "KXPPI", "KXCORECPI",
 )
 
-# Blocklist: tickers starting with these are always skipped (foreign/annual markets)
+# Blocklist: tickers starting with these are always skipped
 DATA_RELEASE_BLOCKLIST = (
-    "KXGDPNOM",  # Foreign nominal GDP (Mexico, Japan, India — resolve annually)
+    "KXGDPNOM",       # Foreign nominal GDP (resolve annually)
+    "KXFEDERALCHARGE", # Federal criminal charges — not a data release
+    "KXFEDCHAIR",     # Fed Chair confirmation/counts
+    "KXFEDMEET",      # Fed meeting attendance markets
+    "KXFEDDC",        # DC-specific political markets
+    "KXFEDGOV",       # Fed governor nominations
+    "KXFEDCHG",       # Fed change count markets
 )
 
-# Maximum hours before release to enter a position (2 weeks — catches Fed meetings early)
-MAX_HOURS_BEFORE = 336
+# Maximum hours before release to enter a position — must align with MAX_POSITION_DAYS
+MAX_HOURS_BEFORE = 72   # 3 days max (cleanup exits anything older anyway)
 # Minimum hours before release (avoid entering <2h out — too risky)
 MIN_HOURS_BEFORE = 2
-# Minimum price gap vs consensus to trade
-MIN_EDGE_CENTS   = 5
+# Minimum 24h volume for can_close_early markets — filters out low-activity long-dated markets
+MIN_VOLUME_24H = 200
 
 
 def _is_data_release_market(ticker: str) -> bool:
@@ -104,7 +110,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             # expiry (years out), not the actual release date. Use 24h volume as
             # a proxy: if traders are active, a release is imminent.
             vol_24h = float(m.get("volume_24h_fp") or m.get("volume_24h") or 0)
-            if vol_24h < 10:
+            if vol_24h < MIN_VOLUME_24H:
                 out_of_window += 1
                 continue
             hours = 24  # treat as same-day for sizing purposes
@@ -146,14 +152,17 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             near_resolved += 1
             continue
 
+        # Trade the side closer to 50¢ (more room to move, less resolution risk)
+        # EV = assumed 55% win rate (data release markets are near-random) minus
+        # cost of being wrong. Flat estimate — no CME divergence data available.
         if yes_price >= 50:
             side      = "yes"
             our_price = yes_price
-            ev        = (100 - yes_price) / yes_price * 0.65
         else:
             side      = "no"
             our_price = 100 - yes_price
-            ev        = yes_price / (100 - yes_price) * 0.65
+        win_rate = 0.55
+        ev = win_rate * (100 - our_price) / 100 - (1 - win_rate) * our_price / 100
 
         logger.info(
             f"[DATARELEASE] CANDIDATE {ticker} | {yes_price}¢ → {side.upper()} "
@@ -199,7 +208,7 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             seen.add(ticker)
             if m.get("can_close_early"):
                 vol_24h = float(m.get("volume_24h_fp") or m.get("volume_24h") or 0)
-                if vol_24h < 10:
+                if vol_24h < MIN_VOLUME_24H:
                     return None
             else:
                 days = days_to_close(m)
