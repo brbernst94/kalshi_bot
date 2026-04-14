@@ -178,14 +178,16 @@ def scan(client, risk_manager, markets: List[Dict] = None) -> List[Dict]:
         if tracked_only_gate and stats["win_rate"] < WHALE_MIN_WIN_RATE and not fill["is_tracked"]:
             continue
 
-        # ── Days check — skip long-dated markets ──────────────────────────
+        # ── Days check — skip long-dated OR unknown markets ───────────────
         mkt  = cache.get(ticker)
         days = days_to_close(mkt) if mkt else None
-        if days is not None and days > MAX_POSITION_DAYS:
-            logger.debug(f"[WHALE] SKIP {ticker} — resolves in {days:.0f}d (>{MAX_POSITION_DAYS}d limit)")
+        if days is None or days > MAX_POSITION_DAYS:
+            logger.debug(
+                f"[WHALE] SKIP {ticker} — "
+                f"{'not in market cache' if days is None else f'resolves in {days:.0f}d'} "
+                f"(>{MAX_POSITION_DAYS}d limit)"
+            )
             continue
-        # If not in cache (market closed to new orders), still allow — it may be
-        # a same-day or this-week market we don't scan. Cleanup will catch it if not.
 
         # Cool-down: skip if we already copied this ticker recently
         if ticker in _recent_copies:
