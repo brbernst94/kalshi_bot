@@ -21,10 +21,14 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from config import (
-    BOND_MAX_DAYS, BOND_MAX_POSITION_PCT, BOND_MIN_PRICE_CENTS,
     KALSHI_TAKER_FEE_PCT, STRATEGY_ALLOCATION, STARTING_BANKROLL_USD,
+    MAX_POSITION_DAYS,
 )
 from client import price_cents as _pc
+
+BOND_MAX_DAYS         = MAX_POSITION_DAYS
+BOND_MIN_PRICE_CENTS  = 55
+BOND_MAX_POSITION_PCT = 0.25
 
 logger = logging.getLogger(__name__)
 
