@@ -56,11 +56,11 @@ TRACKED_WHALE_MEMBERS    = [
 
 # ── Strategy Allocation ───────────────────────────────────────────────────────
 STRATEGY_ALLOCATION = {
-    "datarelease": 0.40,
+    "datarelease": 0.30,
     "weather":     0.30,
     "whale":       0.15,
     "momentum":    0.10,
-    "favbias":     0.05,
+    "favbias":     0.15,
 }
 
 # ── Scheduling ────────────────────────────────────────────────────────────────
