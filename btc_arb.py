@@ -120,10 +120,12 @@ def find_market(client: KalshiClient) -> Optional[Tuple[str, datetime]]:
     valid  = []
     for m in markets:
         ct = _parse_close_time(m)
+        logger.debug(f"[KALSHI] Candidate: {m.get('ticker')}  close={ct}  now={now.strftime('%H:%M:%S')}")
         if ct and now < ct <= cutoff:
             valid.append((m["ticker"], ct))
 
     if not valid:
+        logger.debug(f"[KALSHI] No valid market in window (now={now.strftime('%H:%M:%S')} cutoff={cutoff.strftime('%H:%M:%S')})")
         return None
     valid.sort(key=lambda x: x[1])
     return valid[0]
@@ -405,17 +407,17 @@ def run(client: KalshiClient, dry_run: bool = False) -> None:
         if _stop_flag.is_set():
             break
 
-        # Find the market (retry up to 3x — occasionally takes a moment to open)
+        # Find the market — Kalshi can take up to 60s to open the new market
         result = None
-        for attempt in range(3):
+        for attempt in range(12):
             result = find_market(client)
             if result:
                 break
-            logger.warning(f"No KXBTC15M market found (attempt {attempt+1}/3) — retrying in 5s")
+            logger.warning(f"No KXBTC15M market found (attempt {attempt+1}/12) — retrying in 5s")
             time.sleep(5)
 
         if not result:
-            logger.warning("Skipping cycle — no open market found")
+            logger.warning("Skipping cycle — no open market found after 60s")
             _sleep_until(close_time + timedelta(seconds=5))
             continue
 
