@@ -306,8 +306,8 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
                 except Exception:
                     balance = STARTING_BANKROLL_USD
 
-                count    = max(1, int(balance * POSITION_PCT * 100
-                                      / max(kalshi_px, 1)))
+                # Kalshi reserves 99¢ per contract on market buys — size against that
+                count    = max(1, int(balance * POSITION_PCT * 100 / 99))
                 cost_usd = count * kalshi_px / 100
 
                 # EV calculation for logging
@@ -349,6 +349,8 @@ def trade_cycle(client: KalshiClient, feed: BinanceFeed,
                             f"@ ~{kalshi_px}¢  ${cost_usd:.2f}  "
                             f"hold to {close_time.strftime('%H:%M:%S')} UTC"
                         )
+                else:
+                    break  # buy failed — stop retrying this cycle
 
         time.sleep(0.01)   # 100 Hz — WS push is near-instant
 
