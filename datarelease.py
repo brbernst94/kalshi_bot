@@ -97,21 +97,30 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
     for m in release_markets:
         ticker = m.get("ticker", "")
 
-        # Use cached data — no individual API calls needed.
-        # Cache objects from GET /markets?event_ticker=... have all fields.
-        days = days_to_close(m)
-        if days is None:
-            no_time += 1
-            if no_time == 1:  # log once so we can see the field names
-                time_fields = {k: v for k, v in m.items()
-                               if any(x in k for x in ("time", "date", "expir", "close", "settl"))}
-                logger.info(f"[DATARELEASE] NO_CLOSE_TIME sample {ticker} | time fields: {time_fields}")
-            continue
+        can_close_early = m.get("can_close_early", False)
 
-        hours = days * 24
-        if not (MIN_HOURS_BEFORE <= hours <= MAX_HOURS_BEFORE):
-            out_of_window += 1
-            continue
+        if can_close_early:
+            # These markets close when the data is released — close_time is the max
+            # expiry (years out), not the actual release date. Use 24h volume as
+            # a proxy: if traders are active, a release is imminent.
+            vol_24h = float(m.get("volume_24h_fp") or m.get("volume_24h") or 0)
+            if vol_24h < 10:
+                out_of_window += 1
+                continue
+            hours = 24  # treat as same-day for sizing purposes
+        else:
+            days = days_to_close(m)
+            if days is None:
+                no_time += 1
+                if no_time == 1:
+                    time_fields = {k: v for k, v in m.items()
+                                   if any(x in k for x in ("time", "date", "expir", "close", "settl"))}
+                    logger.info(f"[DATARELEASE] NO_CLOSE_TIME sample {ticker} | time fields: {time_fields}")
+                continue
+            hours = days * 24
+            if not (MIN_HOURS_BEFORE <= hours <= MAX_HOURS_BEFORE):
+                out_of_window += 1
+                continue
 
         # Price from cache (handles new _dollars format and legacy integer cents)
         yes_price = _pc(m, "yes_ask") or _pc(m, "last_price") or _pc(m, "yes_bid")
@@ -188,9 +197,14 @@ def scan(client, risk_manager, markets=None) -> List[Dict]:
             if not ticker or ticker in seen:
                 return None
             seen.add(ticker)
-            days = days_to_close(m)
-            if days is None or not (MIN_HOURS_BEFORE <= days * 24 <= MAX_HOURS_BEFORE):
-                return None
+            if m.get("can_close_early"):
+                vol_24h = float(m.get("volume_24h_fp") or m.get("volume_24h") or 0)
+                if vol_24h < 10:
+                    return None
+            else:
+                days = days_to_close(m)
+                if days is None or not (MIN_HOURS_BEFORE <= days * 24 <= MAX_HOURS_BEFORE):
+                    return None
             yes_price = _pc(m, "yes_ask") or _pc(m, "last_price") or _pc(m, "yes_bid")
             if not yes_price or yes_price >= 97 or yes_price <= 3:
                 return None
