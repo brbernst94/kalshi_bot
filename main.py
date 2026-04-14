@@ -1,8 +1,9 @@
 """
 main.py — Kalshi Trading Bot
 ==============================
-Two strategies only: Data Release (24.7x PF) and Weather (18.2x PF).
-All others disabled until proven.
+CFTC-regulated prediction market trading.
+Four strategies, $500 seed, $5k/month target.
+Daily analyst runs at 00:15 UTC — scores strategies, rewrites config if needed.
 
 Usage:
   python main.py            # Live trading
@@ -27,11 +28,14 @@ from risk      import RiskManager
 from monitor   import check_positions, cleanup_long_dated_positions, liquidate_all_positions
 from dashboard import print_dashboard, monthly_summary
 from analyst   import run_daily_analysis
+import whale as whale_strat
+import momentum as momentum_strat
 import datarelease as datarelease_strat
 import weather as weather_strat
-import bond as bond_strat
+import favbias as favbias_strat
 from config import (
-    MONITOR_SCAN_MINS, DATARELEASE_SCAN_MINS, WEATHER_SCAN_MINS, BOND_SCAN_MINS,
+    WHALE_SCAN_MINS, MOMENTUM_SCAN_MINS, MONITOR_SCAN_MINS,
+    DATARELEASE_SCAN_MINS, WEATHER_SCAN_MINS, FAVBIAS_SCAN_MINS,
 )
 
 setup_logging()
@@ -42,14 +46,15 @@ risk_manager = None
 DRY_RUN      = False
 cycle        = 0
 
-# Shared market cache — fetched once per 5 minutes, shared across strategies
+# Shared market cache — fetched once per minute, shared across all strategies
 _market_cache      = []
 _market_cache_time = 0
 
 def get_cached_markets():
     global _market_cache, _market_cache_time
+    import time
     now = time.time()
-    if now - _market_cache_time > 300:
+    if now - _market_cache_time > 300:   # refresh every 5 minutes
         try:
             _market_cache      = client.get_all_open_markets()
             _market_cache_time = now
@@ -58,6 +63,18 @@ def get_cached_markets():
             logger.error(f"[CACHE] Market fetch failed: {e}")
     return _market_cache
 
+
+def run_whale():
+    logger.info("━━━ WHALE CYCLE ━━━")
+    markets = get_cached_markets()
+    c = whale_strat.scan(client, risk_manager, markets)
+    if not DRY_RUN: whale_strat.execute(client, risk_manager, c)
+
+def run_momentum():
+    logger.info("━━━ MOMENTUM CYCLE ━━━")
+    markets = get_cached_markets()
+    c = momentum_strat.scan(client, risk_manager, markets)
+    if not DRY_RUN: momentum_strat.execute(client, risk_manager, c)
 
 def run_datarelease():
     logger.info("━━━ DATA RELEASE CYCLE ━━━")
@@ -71,11 +88,11 @@ def run_weather():
     c = weather_strat.scan(client, risk_manager, markets)
     if not DRY_RUN: weather_strat.execute(client, risk_manager, c)
 
-def run_bond():
-    logger.info("━━━ BOND CYCLE ━━━")
+def run_favbias():
+    logger.info("━━━ FAVBIAS CYCLE ━━━")
     markets = get_cached_markets()
-    c = bond_strat.scan(client, risk_manager, markets)
-    if not DRY_RUN: bond_strat.execute(client, risk_manager, c)
+    c = favbias_strat.scan(client, risk_manager, markets)
+    if not DRY_RUN: favbias_strat.execute(client, risk_manager, c)
 
 def run_monitor():
     global cycle
@@ -92,7 +109,9 @@ def run_liquidate_all():
     liquidate_all_positions(client, risk_manager)
 
 def run_cleanup():
-    """Exit all portfolio positions resolving beyond MAX_POSITION_DAYS."""
+    """Exit all portfolio positions resolving beyond MAX_POSITION_DAYS.
+    Passes the market cache so cleanup uses real resolution dates, not the
+    per-session trading-window close_time that Kalshi puts on position objects."""
     if DRY_RUN:
         logger.info("[CLEANUP] DRY-RUN — skipping long-dated position sweep")
         return
@@ -110,65 +129,11 @@ def run_analysis():
                 "⚠️  Config rebalanced. New allocation: " +
                 " | ".join(f"{k}={v:.0%}" for k, v in new_alloc.items())
             )
+            logger.info("   Strategies will use new weights on next scan cycle.")
         else:
             logger.info("✅ All strategies performing — no rebalancing needed.")
     except Exception as e:
         logger.error(f"[ANALYST] Analysis failed: {e}", exc_info=True)
-
-def run_force_trade():
-    """Last resort: if nothing else traded, buy 1 contract of whatever we can find."""
-    # Only runs if zero positions after 10 minutes of bot running
-    if len(risk_manager.open_positions) > 0:
-        return  # Already have positions, don't need to force
-
-    logger.info("━━━ FORCE TRADE CYCLE ━━━")
-    try:
-        markets = get_cached_markets()
-        # Find ANY market with a valid price between 20-80 cents
-        candidates = []
-        SPORTS_SKIP = ("KXNFL", "KXNBA", "KXMLB", "KXNHL", "KXMVE", "KXWBC",
-                       "KXUFC", "KXPGA", "KXMLS", "KXNCAA", "KXWTA", "KXATP")
-        from client import price_cents as _pc
-        from bond import days_to_close
-        for m in markets:
-            ticker = m.get("ticker", "")
-            # Skip sports
-            if any(ticker.startswith(p) for p in SPORTS_SKIP):
-                continue
-            yes_price = _pc(m, "yes_ask") or _pc(m, "last_price") or _pc(m, "yes_bid")
-            if not yes_price or yes_price < 20 or yes_price > 80:
-                continue
-            days = days_to_close(m)
-            if days is None or days > 30 or days < 0.05:
-                continue
-            candidates.append((m.get("volume", 0) or 0, yes_price, ticker, m))
-
-        if not candidates:
-            logger.warning("[FORCE] No suitable markets found at all — check cache/API")
-            return
-
-        # Sort by volume descending, pick top candidate
-        candidates.sort(reverse=True)
-        _, yes_price, ticker, m = candidates[0]
-
-        side = "yes" if yes_price >= 50 else "no"
-        price = yes_price if side == "yes" else 100 - yes_price
-
-        logger.info(f"[FORCE] Placing test trade: {ticker} {side.upper()} @ {price}¢")
-
-        if not DRY_RUN:
-            try:
-                client.place_limit_order(
-                    ticker=ticker, side=side, action="buy",
-                    price_cents=price, count=1, post_only=False
-                )
-                risk_manager.record_open(ticker, 1, price, "force_trade", side=side)
-                logger.info(f"[FORCE] Trade placed successfully: {ticker}")
-            except Exception as e:
-                logger.error(f"[FORCE] Trade failed: {e}")
-    except Exception as e:
-        logger.error(f"[FORCE] Error: {e}")
-
 
 def shutdown(signum, frame):
     logger.info("Shutdown signal — final report:")
@@ -181,9 +146,12 @@ def main():
     global client, risk_manager, DRY_RUN
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("--dry-run",  action="store_true")
-    parser.add_argument("--demo",     action="store_true")
-    parser.add_argument("--analyze",  action="store_true")
+    parser.add_argument("--dry-run",  action="store_true",
+                        help="Scan only — no orders placed")
+    parser.add_argument("--demo",     action="store_true",
+                        help="Use Kalshi demo environment")
+    parser.add_argument("--analyze",  action="store_true",
+                        help="Run daily analysis immediately and exit")
     args    = parser.parse_args()
     DRY_RUN = args.dry_run
 
@@ -196,6 +164,7 @@ def main():
     logger.info(f"🚀 Kalshi Bot | {mode} | Target: $5,000/month")
     logger.info(f"   Base URL: {__import__('config').BASE_URL}")
 
+    # Analysis-only mode (useful for manual inspection)
     if args.analyze:
         run_analysis()
         sys.exit(0)
@@ -215,37 +184,31 @@ def main():
                 "Check KALSHI_API_KEY_ID and KALSHI_PRIVATE_KEY in your .env"
             )
             sys.exit(1)
-        # Log raw balance API response for diagnostics
-        try:
-            raw = client._get("/portfolio/balance")
-            logger.info(f"[STARTUP] Balance API response keys: {list(raw.keys())}")
-            logger.info(f"[STARTUP] Balance API response: {raw}")
-        except Exception as e:
-            logger.warning(f"[STARTUP] Balance diagnostic failed: {e}")
 
     signal.signal(signal.SIGINT,  shutdown)
     signal.signal(signal.SIGTERM, shutdown)
 
     # ── Schedules ─────────────────────────────────────────────────────────────
+    schedule.every(WHALE_SCAN_MINS).minutes.do(run_whale)
+    schedule.every(MOMENTUM_SCAN_MINS).minutes.do(run_momentum)
     schedule.every(DATARELEASE_SCAN_MINS).minutes.do(run_datarelease)
     schedule.every(WEATHER_SCAN_MINS).minutes.do(run_weather)
-    schedule.every(BOND_SCAN_MINS).minutes.do(run_bond)
+    schedule.every(FAVBIAS_SCAN_MINS).minutes.do(run_favbias)
     schedule.every(MONITOR_SCAN_MINS).minutes.do(run_monitor)
-    schedule.every(15).minutes.do(run_force_trade)
     schedule.every(4).hours.do(run_cleanup)
     schedule.every().day.at("00:15").do(run_analysis)
     schedule.every().day.at("23:55").do(monthly_summary)
 
     logger.info("Running initial scan on startup...")
+    run_cleanup()
+    run_whale()
+    run_momentum()
     run_datarelease()
     run_weather()
-    run_bond()
+    run_favbias()
     run_monitor()
 
-    # Force trade fallback — runs 2 minutes after startup if nothing else traded
-    threading.Timer(120, run_force_trade).start()
-
-    logger.info("⏱  Main loop active.")
+    logger.info("⏱  Main loop active. Daily analysis scheduled for 00:15 UTC.")
     while True:
         schedule.run_pending()
         time.sleep(20)

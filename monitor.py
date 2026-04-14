@@ -21,13 +21,9 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from bond import days_to_close
-from config import MAX_POSITION_DAYS
+from config import MAX_POSITION_DAYS, STOP_LOSS_PCT, TAKE_PROFIT_PCT
 
 logger = logging.getLogger(__name__)
-
-# ── Global stop loss / take profit (percentage of entry price) ────────────────
-STOP_LOSS_PCT   = 0.10   # Exit if price drops 10% from entry (e.g. 50¢ → 45¢)
-TAKE_PROFIT_PCT = 0.70   # Exit if price gains 70% from entry (e.g. 50¢ → 85¢)
 
 # Resolution thresholds
 RESOLUTION_YES = 98

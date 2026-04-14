@@ -36,7 +36,7 @@ from config import STRATEGY_ALLOCATION, MAX_POSITION_DAYS, STARTING_BANKROLL_USD
 logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-MIN_EDGE_CENTS   = 3    # Minimum divergence from NWS forecast to enter (lowered from 8)
+MIN_EDGE_CENTS   = 8    # Minimum divergence from NWS forecast to enter
 MAX_CONTRACTS    = 40   # Per trade cap
 MAX_DAYS_OUT     = 2    # Only trade today/tomorrow weather markets
 MIN_PRICE_CENTS  = 5    # Don't buy < 5¢ (too much slippage risk)
