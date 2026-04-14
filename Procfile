@@ -1,1 +1,1 @@
-worker: python btc_arb.py
+worker: python main.py
