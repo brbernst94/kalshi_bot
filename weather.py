@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # ── Config ────────────────────────────────────────────────────────────────────
 MIN_EDGE_CENTS   = 8    # Minimum divergence from NWS forecast to enter
 MAX_CONTRACTS    = 40   # Per trade cap
-MAX_DAYS_OUT     = 2    # Only trade today/tomorrow weather markets
+MAX_DAYS_OUT     = 3    # Trade weather markets up to 3 days out
 MIN_PRICE_CENTS  = 5    # Don't buy < 5¢ (too much slippage risk)
 MAX_PRICE_CENTS  = 94   # Don't buy > 94¢ (tiny upside)
 
@@ -229,19 +229,22 @@ def scan(client, risk_manager, markets: List[Dict]) -> List[Dict]:
     for m in weather_markets:
         ticker = m.get("ticker", "")
 
-        # Days check — prefer cached close_time, fall back to date in ticker
-        days = days_to_close(m)
+        # Days check — use ticker date (most reliable for weather), fall back to API fields
+        # Kalshi sets expiration_time/expected_expiration_time far out when listing markets,
+        # so days_to_close() often returns 3-7 days even for today's markets.
+        # The YYMMM dd date embedded in the ticker is the actual resolution day.
+        days = None
+        pm = re.search(r'-(\d{2}[A-Z]{3}\d{2})-', ticker.upper())
+        if pm:
+            try:
+                dt = datetime.strptime(pm.group(1), "%y%b%d").replace(tzinfo=timezone.utc)
+                days = (dt - datetime.now(timezone.utc)).total_seconds() / 86400
+            except Exception:
+                pass
         if days is None:
-            # Parse date from ticker: KXHIGHTBOS-26MAR26-T56 → "26MAR26"
-            pm = re.search(r'-(\d{2}[A-Z]{3}\d{2})-', ticker.upper())
-            if pm:
-                try:
-                    dt = datetime.strptime(pm.group(1), "%y%b%d").replace(tzinfo=timezone.utc)
-                    days = (dt - datetime.now(timezone.utc)).total_seconds() / 86400
-                except Exception:
-                    days = None
-        # Allow slightly negative days (ticker date is midnight UTC but market closes EOD)
-        # e.g. today at 20:00 UTC, "26MAR26" gives days=-0.87 but market is still live
+            days = days_to_close(m)
+        # Allow slightly negative days — ticker date is midnight UTC but market closes EOD.
+        # e.g. at 20:00 UTC on market day, days ≈ -0.83 but market is still live.
         if days is None or days > MAX_DAYS_OUT or days < -0.95:
             continue
 
