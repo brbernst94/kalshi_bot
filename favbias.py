@@ -108,11 +108,15 @@ def scan(client, risk_manager, markets: List[Dict]) -> List[Dict]:
             continue
 
         # Volume filter — only liquid markets
-        volume = m.get("volume_24h") or m.get("volume", 0)
-        try:
-            volume = float(volume)
-        except (TypeError, ValueError):
-            volume = 0
+        volume = 0
+        for _vf in ("volume_24h_fp", "volume_24h", "volume_fp", "volume"):
+            _v = m.get(_vf)
+            if _v:
+                try:
+                    volume = float(_v)
+                    break
+                except (TypeError, ValueError):
+                    continue
         if volume < MIN_VOLUME_24H:
             continue
 
@@ -199,8 +203,8 @@ def execute(client, risk_manager, candidates: List[Dict]) -> None:
         if ticker in risk_manager.open_positions:
             continue
 
-        if not risk_manager.can_open_position(ticker, entry_px, count):
-            logger.debug(f"[FAVBIAS] Risk check failed for {ticker}")
+        edge = c["edge_cents"] / 100
+        if not risk_manager.approve("favbias", ticker, entry_px * count / 100, edge):
             continue
 
         try:

@@ -36,8 +36,8 @@ logger = logging.getLogger(__name__)
 MOMENTUM_MIN_MOVE_CENTS = 5      # Minimum price move between cycles to trigger
 MOMENTUM_MIN_VOLUME     = 2000   # Minimum 24h contracts — ensures real liquidity
 MOMENTUM_TOP_N          = 60     # Only scan top N markets by volume each cycle
-MOMENTUM_MIN_DAYS       = 2      # Skip markets resolving in < 2 days (too volatile)
-MOMENTUM_MAX_DAYS       = 3      # Capped at global MAX_POSITION_DAYS — no long-dated bets
+MOMENTUM_MIN_DAYS       = 0      # Allow same-day markets (BTC15M, daily crypto)
+MOMENTUM_MAX_DAYS       = 30     # Follow whale-style: up to 30 days out
 MOMENTUM_MAX_POS_PCT    = 0.07   # Max 7% of balance per trade
 
 # Markets where price moves reflect REAL information (not game-state noise)
@@ -109,7 +109,7 @@ COOLDOWN_SECS = 600  # Don't re-enter the same market within 10 minutes
 
 
 def _get_volume(m: dict) -> int:
-    for field in ("volume_24h", "volume", "open_interest"):
+    for field in ("volume_24h_fp", "volume_24h", "volume_fp", "volume", "open_interest_fp", "open_interest"):
         v = m.get(field)
         if v:
             try:
