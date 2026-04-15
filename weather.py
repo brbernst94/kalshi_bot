@@ -91,6 +91,14 @@ NWS_GRIDPOINTS = {
     "JFK": ("OKX", 33, 37),   # JFK = NYC
     "LGA": ("OKX", 33, 37),   # LGA = NYC
     "EWR": ("OKX", 33, 37),   # Newark = NYC
+    # Kalshi short codes
+    "NY":  ("OKX", 33, 37),   # KXHIGHNY → New York City
+    "LA":  ("LOX", 149, 48),  # KXHIGHLA → Los Angeles
+    "SF":  ("MTR", 85, 105),  # KXHIGHSF → San Francisco
+    "DC":  ("LWX", 96, 70),   # KXHIGHDC → Washington DC
+    "TB":  ("TBW", 51, 68),   # KXHIGHTB → Tampa
+    "NO":  ("LIX", 41, 90),   # KXHIGHNO → New Orleans
+    "KC":  ("EAX", 48, 70),   # KXHIGHKC → Kansas City
 }
 
 # City code extraction from ticker
@@ -228,7 +236,7 @@ def scan(client, risk_manager, markets: List[Dict]) -> List[Dict]:
             pm = re.search(r'-(\d{2}[A-Z]{3}\d{2})-', ticker.upper())
             if pm:
                 try:
-                    dt = datetime.strptime(pm.group(1), "%d%b%y").replace(tzinfo=timezone.utc)
+                    dt = datetime.strptime(pm.group(1), "%y%b%d").replace(tzinfo=timezone.utc)
                     days = (dt - datetime.now(timezone.utc)).total_seconds() / 86400
                 except Exception:
                     days = None

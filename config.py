@@ -46,7 +46,7 @@ TAKE_PROFIT_PCT = 0.70   # Exit if price gains 70% from entry
 MAX_POSITION_DAYS = 3    # No position beyond 3 days; cleanup exits any older ones
 
 # ── Whale following ───────────────────────────────────────────────────────────
-WHALE_MIN_CONTRACTS      = 50
+WHALE_MIN_CONTRACTS      = 20
 WHALE_COPY_DELAY_SECS    = 45
 WHALE_MAX_COPY_FRAC      = 0.20
 WHALE_MIN_WIN_RATE       = 0.65
