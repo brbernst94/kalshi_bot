@@ -175,6 +175,7 @@ def scan(client, risk_manager, markets: List[Dict] = None) -> List[Dict]:
                 held_events.add(et)
 
     candidates = []
+    skip_days = skip_event = skip_cooldown = 0
 
     for fill in raw_fills:
         ticker    = fill["ticker"]
@@ -187,20 +188,21 @@ def scan(client, risk_manager, markets: List[Dict] = None) -> List[Dict]:
         if tracked_only_gate and stats["win_rate"] < WHALE_MIN_WIN_RATE and not fill["is_tracked"]:
             continue
 
-        # ── Days check — skip long-dated OR unknown markets ───────────────
+        # ── Days check — skip expired/unknown OR long-dated markets ──────
         mkt  = cache.get(ticker)
         days = days_to_close(mkt) if mkt else None
         if days is None or days > WHALE_MAX_DAYS:
-            logger.debug(
-                f"[WHALE] SKIP {ticker} — "
-                f"{'not in market cache' if days is None else f'resolves in {days:.0f}d'} "
-                f"(>{WHALE_MAX_DAYS}d limit)"
+            skip_days += 1
+            logger.info(
+                f"[WHALE] SKIP_DAYS {ticker} | "
+                f"{'not in cache' if not mkt else ('expired' if days is None else f'{days:.1f}d out')}"
             )
             continue
 
         # ── Event dedup — one position per underlying event ───────────────
         event_ticker = mkt.get("event_ticker", "") if mkt else ""
         if event_ticker and event_ticker in held_events:
+            skip_event += 1
             logger.debug(f"[WHALE] SKIP {ticker} — already hold a position in event {event_ticker}")
             continue
 
@@ -211,6 +213,7 @@ def scan(client, risk_manager, markets: List[Dict] = None) -> List[Dict]:
                        last.get("copied_at", datetime.now(timezone.utc))
                        ).total_seconds() / 60
             if elapsed < 30:   # 30-minute cooldown per ticker
+                skip_cooldown += 1
                 continue
 
         confidence = min(stats["win_rate"] / 0.75, 1.0)
@@ -229,7 +232,10 @@ def scan(client, risk_manager, markets: List[Dict] = None) -> List[Dict]:
             held_events.add(event_ticker)
 
     candidates.sort(key=lambda x: x["cost_usd"] * x["confidence"], reverse=True)
-    logger.info(f"[WHALE] {len(candidates)} actionable signal(s)")
+    logger.info(
+        f"[WHALE] {len(candidates)} actionable | "
+        f"filtered: {skip_days} days, {skip_event} event-dup, {skip_cooldown} cooldown"
+    )
     for c in candidates[:3]:
         logger.info(
             f"  ↳ {c['title'][:55]} | {c['side'].upper()} {c['count']}x "
