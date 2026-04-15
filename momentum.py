@@ -33,11 +33,11 @@ from client import price_cents as _pc
 logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-MOMENTUM_MIN_MOVE_CENTS = 5      # Minimum price move between cycles to trigger
+MOMENTUM_MIN_MOVE_CENTS = 8      # Minimum price move between cycles to trigger (noise filter)
 MOMENTUM_MIN_VOLUME     = 2000   # Minimum 24h contracts — ensures real liquidity
 MOMENTUM_TOP_N          = 60     # Only scan top N markets by volume each cycle
-MOMENTUM_MIN_DAYS       = 0      # Allow same-day markets (BTC15M, daily crypto)
-MOMENTUM_MAX_DAYS       = 30     # Follow whale-style: up to 30 days out
+MOMENTUM_MIN_DAYS       = 1      # Min 1 day to expiry — excludes BTC15M and same-day crypto
+MOMENTUM_MAX_DAYS       = 14     # Up to 2 weeks for political/macro momentum plays
 MOMENTUM_MAX_POS_PCT    = 0.07   # Max 7% of balance per trade
 
 # Markets where price moves reflect REAL information (not game-state noise)

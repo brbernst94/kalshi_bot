@@ -31,8 +31,8 @@ from config import (
 logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-MIN_VOLUME_24H   = 5000   # Only trade high-liquidity markets
-MIN_EDGE_CENTS   = 8      # Skip if divergence < 8¢ from base rate
+MIN_VOLUME_24H   = 10000  # Only trade very liquid markets (was 5000)
+MIN_EDGE_CENTS   = 12     # Skip if divergence < 12¢ from base rate (was 8)
 MAX_CONTRACTS    = 50     # Per-trade cap
 MIN_PRICE_CENTS  = 5
 MAX_PRICE_CENTS  = 94
@@ -43,28 +43,21 @@ MAX_DAYS_OUT     = 3      # Respect global horizon
 # YES_base = historical frequency that YES resolves (before crowd bias).
 # Crowd systematically pushes popular outcomes above these rates.
 BASE_RATES: Dict[str, float] = {
-    # Crypto 15-min: direction is near-random, base rate ≈ 50%
-    "KXBTC15M":   0.50,
-    "KXETH15M":   0.50,
-    "KXXRP15M":   0.50,
-    "KXSOL15M":   0.50,
-
     # Presidential/political mentions: incumbents mentioned more → crowds
     # overbet YES (mentioned) — real rate closer to 55%
     "KXPRESMENTION": 0.55,
     "KXMENTION":     0.55,
 
-    # Elections: favourite bias is strong — crowds push front-runners 5-10¢ high
-    "KXELECTION":  0.50,   # binary race — true 50/50 before info
-    "KXPRES":      0.50,
-
     # Government shutdown: bias toward NO (gov stays open) — crowds underbet YES
-    "KXGOVTSHUT":  0.25,   # shutdowns happen ~25% of deadline events historically
+    # Shutdowns happen ~25% of deadline events historically
+    "KXGOVTSHUT":  0.25,
 
-    # Trump/Congress: high name recognition inflates YES prices
+    # Trump/Congress: high name recognition inflates YES prices vs base rate
     "KXTRUMP":     0.50,
     "KXCONGRESS":  0.50,
 }
+# REMOVED: KXBTC15M/KXETH15M/KXXRP15M/KXSOL15M (random direction, no base-rate edge)
+# REMOVED: KXELECTION/KXPRES (50% base rate = no divergence signal without a specific model)
 
 # ── Bias threshold ────────────────────────────────────────────────────────────
 # Crowd must push price this many cents ABOVE base rate to trade

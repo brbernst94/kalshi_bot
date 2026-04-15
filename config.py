@@ -33,10 +33,10 @@ CONTRACT_VALUE_USD     = 1.00
 
 # ── Capital & Risk ────────────────────────────────────────────────────────────
 STARTING_BANKROLL_USD    = 1000.00
-MAX_SINGLE_POSITION_PCT  = 0.20
-MAX_DAILY_LOSS_PCT       = 0.10
-MAX_OPEN_POSITIONS       = 20
-MIN_NET_EDGE             = 0.02
+MAX_SINGLE_POSITION_PCT  = 0.15   # Max 15% of balance per position (was 20%)
+MAX_DAILY_LOSS_PCT       = 0.08   # Stop trading at 8% daily loss (was 10%)
+MAX_OPEN_POSITIONS       = 6      # Max simultaneous positions (was 20 — way too many)
+MIN_NET_EDGE             = 0.03   # Raise minimum edge threshold (was 0.02)
 
 # ── Stop / Take profit (global, used by monitor.py) ──────────────────────────
 STOP_LOSS_PCT   = 0.10   # Exit if price drops 10% from entry
