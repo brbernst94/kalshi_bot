@@ -38,7 +38,7 @@ logger = logging.getLogger(__name__)
 # ── Config ────────────────────────────────────────────────────────────────────
 MIN_EDGE_CENTS   = 8    # Minimum divergence from NWS forecast to enter
 MAX_CONTRACTS    = 40   # Per trade cap
-MAX_DAYS_OUT     = 3    # Trade weather markets up to 3 days out
+MAX_DAYS_OUT     = 7    # NWS is accurate to 7 days; Kalshi lists markets that far ahead
 MIN_PRICE_CENTS  = 5    # Don't buy < 5¢ (too much slippage risk)
 MAX_PRICE_CENTS  = 94   # Don't buy > 94¢ (tiny upside)
 

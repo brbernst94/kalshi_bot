@@ -190,12 +190,23 @@ def scan(client, risk_manager, markets: List[Dict] = None) -> List[Dict]:
 
         # ── Days check — skip expired/unknown OR long-dated markets ──────
         mkt  = cache.get(ticker)
-        days = days_to_close(mkt) if mkt else None
+        if not mkt:
+            # Not in the main market cache — fetch directly (e.g. intraday BTC
+            # strikes and some weather markets aren't returned by the event paginator)
+            try:
+                raw = client.get_market(ticker)
+                mkt = raw.get("market", raw)
+                cache[ticker] = mkt  # add to cache so event_dedup works below
+            except Exception:
+                skip_days += 1
+                logger.info(f"[WHALE] SKIP_DAYS {ticker} | not in cache, fetch failed")
+                continue
+        days = days_to_close(mkt)
         if days is None or days > WHALE_MAX_DAYS:
             skip_days += 1
             logger.info(
                 f"[WHALE] SKIP_DAYS {ticker} | "
-                f"{'not in cache' if not mkt else ('expired' if days is None else f'{days:.1f}d out')}"
+                f"{'expired' if days is None else f'{days:.1f}d out'}"
             )
             continue
 
