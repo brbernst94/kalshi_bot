@@ -162,7 +162,7 @@ def scan(client, risk_manager, markets: List[Dict] = None) -> List[Dict]:
 
     # Build ticker→market lookup from cache for days check
     from bond import days_to_close
-    from config import MAX_POSITION_DAYS
+    WHALE_MAX_DAYS = 30  # whale can follow longer-dated conviction fills
     cache = {m.get("ticker", ""): m for m in (markets or [])}
 
     # Build set of event_tickers already held — one position per event max
@@ -190,11 +190,11 @@ def scan(client, risk_manager, markets: List[Dict] = None) -> List[Dict]:
         # ── Days check — skip long-dated OR unknown markets ───────────────
         mkt  = cache.get(ticker)
         days = days_to_close(mkt) if mkt else None
-        if days is None or days > MAX_POSITION_DAYS:
+        if days is None or days > WHALE_MAX_DAYS:
             logger.debug(
                 f"[WHALE] SKIP {ticker} — "
                 f"{'not in market cache' if days is None else f'resolves in {days:.0f}d'} "
-                f"(>{MAX_POSITION_DAYS}d limit)"
+                f"(>{WHALE_MAX_DAYS}d limit)"
             )
             continue
 
