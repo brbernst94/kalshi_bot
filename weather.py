@@ -36,9 +36,9 @@ from config import STRATEGY_ALLOCATION, MAX_POSITION_DAYS, STARTING_BANKROLL_USD
 logger = logging.getLogger(__name__)
 
 # ── Config ────────────────────────────────────────────────────────────────────
-MIN_EDGE_CENTS   = 8    # Minimum divergence from NWS forecast to enter
+MIN_EDGE_CENTS   = 15   # Require 15¢ NWS divergence — only high-confidence signals
 MAX_CONTRACTS    = 40   # Per trade cap
-MAX_DAYS_OUT     = 7    # NWS is accurate to 7 days; Kalshi lists markets that far ahead
+MAX_DAYS_OUT     = 2    # NWS accuracy drops sharply past 48h; only trade today/tomorrow
 MIN_PRICE_CENTS  = 5    # Don't buy < 5¢ (too much slippage risk)
 MAX_PRICE_CENTS  = 94   # Don't buy > 94¢ (tiny upside)
 

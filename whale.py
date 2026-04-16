@@ -162,7 +162,7 @@ def scan(client, risk_manager, markets: List[Dict] = None) -> List[Dict]:
 
     # Build ticker→market lookup from cache for days check
     from bond import days_to_close
-    WHALE_MAX_DAYS = 30  # whale can follow longer-dated conviction fills
+    WHALE_MAX_DAYS = 7   # only follow fills on markets resolving within a week
     cache = {m.get("ticker", ""): m for m in (markets or [])}
 
     # Build set of event_tickers already held — one position per event max

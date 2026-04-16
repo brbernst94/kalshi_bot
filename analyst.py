@@ -41,7 +41,7 @@ ANALYSIS_DIR   = "logs"
 CONFIG_FILE    = "config.py"
 HISTORY_FILE   = "logs/score_history.json"
 
-STRATEGIES     = ["whale", "fade", "bond", "longshot"]
+STRATEGIES     = ["whale", "datarelease", "weather", "momentum", "favbias"]
 MIN_ALLOC      = 0.05
 MAX_ALLOC      = 0.50
 LOW_SCORE_THRESHOLD  = 0.35
@@ -403,12 +403,12 @@ def run_daily_analysis():
         for n in STRATEGIES
     )
 
-    # Rewrite config if needed
-    if changed:
-        rewrite_config(new_alloc, scores)
-        logger.info(f"[ANALYST] Allocation changed: {current_alloc} → {new_alloc}")
-    else:
-        logger.info("[ANALYST] Allocation unchanged")
+    # Config rewriting disabled — strategies need more live data before auto-tuning
+    # Uncomment once each strategy has 20+ closed trades with consistent P&L:
+    # if changed:
+    #     rewrite_config(new_alloc, scores)
+    #     logger.info(f"[ANALYST] Allocation changed: {current_alloc} → {new_alloc}")
+    logger.info(f"[ANALYST] Suggested allocation (NOT applied): {new_alloc}")
 
     # Overall stats
     overall_pnl   = sum(s["total_pnl"] for s in scores.values())

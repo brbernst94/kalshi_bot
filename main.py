@@ -189,7 +189,7 @@ def main():
 
     # ── Schedules ─────────────────────────────────────────────────────────────
     schedule.every(WHALE_SCAN_MINS).minutes.do(run_whale)
-    schedule.every(MOMENTUM_SCAN_MINS).minutes.do(run_momentum)
+    # momentum disabled — unproven on live markets, was causing losses on short-expiry fills
     schedule.every(DATARELEASE_SCAN_MINS).minutes.do(run_datarelease)
     schedule.every(WEATHER_SCAN_MINS).minutes.do(run_weather)
     schedule.every(FAVBIAS_SCAN_MINS).minutes.do(run_favbias)
@@ -201,7 +201,6 @@ def main():
     logger.info("Running initial scan on startup...")
     run_cleanup()
     run_whale()
-    run_momentum()
     run_datarelease()
     run_weather()
     run_favbias()
