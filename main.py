@@ -27,7 +27,8 @@ from client    import KalshiClient
 from risk      import RiskManager
 from monitor   import check_positions, cleanup_long_dated_positions, liquidate_all_positions
 from dashboard import print_dashboard, monthly_summary
-from analyst   import run_daily_analysis
+from analyst      import run_daily_analysis
+from daily_agent  import run_daily_agent
 import whale as whale_strat
 import momentum as momentum_strat
 import datarelease as datarelease_strat
@@ -190,19 +191,19 @@ def main():
 
     # ── Schedules ─────────────────────────────────────────────────────────────
     schedule.every(WHALE_SCAN_MINS).minutes.do(run_whale)
-    schedule.every(MOMENTUM_SCAN_MINS).minutes.do(run_momentum)
+    # momentum disabled — was causing losses on short-expiry fills
     schedule.every(DATARELEASE_SCAN_MINS).minutes.do(run_datarelease)
     schedule.every(WEATHER_SCAN_MINS).minutes.do(run_weather)
     schedule.every(FAVBIAS_SCAN_MINS).minutes.do(run_favbias)
     schedule.every(MONITOR_SCAN_MINS).minutes.do(run_monitor)
     schedule.every(4).hours.do(run_cleanup)
+    schedule.every().day.at("00:00").do(run_daily_agent)
     schedule.every().day.at("00:15").do(run_analysis)
     schedule.every().day.at("23:55").do(monthly_summary)
 
     logger.info("Running initial scan on startup...")
     run_cleanup()
     run_whale()
-    run_momentum()
     run_datarelease()
     run_weather()
     run_favbias()
